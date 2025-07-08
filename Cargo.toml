@@ -1,0 +1,14 @@
+[package]
+name = "datatools"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }         # for CLI parsing
+parquet = { version = "54.2.1", features = ["cli","async","json"] }  # core Parquet APIs
+parquet-format = "4.0.0"                                # Thrift structs
+thiserror = "1"                                         # ergonomic error types
+tokio = { version = "1", features = ["fs","io-util"] }  # async file I/O
+prettytable = "0.10"     # for nice CLI tables
+anyhow = "1.0.98"
+comfy-table    = "7"        # for tables with style & coloring
