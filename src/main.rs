@@ -286,20 +286,28 @@ impl App {
         let root = schema_descr.root_schema();
 
         // Recursive traversal helper
-        fn traverse(node: &ParquetType, prefix: String, is_last: bool, lines: &mut Vec<String>) {
-            let connector = if is_last { "└─" } else { "├─" };
-            let mut line = format!("{}{} {}", prefix, connector, node.name());
+        fn traverse(node: &ParquetType, prefix: String, is_last: bool, lines: &mut Vec<String>, map: &mut HashMap<String, String>) {
+            let connector: &'static str = if is_last { "└─" } else { "├─" };
+            let line = format!("{}{} {}", prefix, connector, node.name());
 
             // Determine details for the node
             if node.is_primitive() {
                 // Leaf column
                 let repetition = format!("{:?}", node.get_basic_info().repetition());
                 let physical = format!("{:?}", node.get_physical_type());
-                line.push_str(&format!(" {} | {}", repetition, physical));
+                let logical = match node.get_basic_info().logical_type() {
+                    Some(logical) => format!("[{:?}]", logical),
+                    None => "".to_string(),
+                };
+                let codecs = 
+
+                // line.push_str(&format!(" {} | {}", repetition, physical));
+                map.insert(line.clone(), format!("{} | {} {}", repetition, physical, logical));
             } else {
                 // Group / map etc.
                 let repetition = format!("{:?}", node.get_basic_info().repetition());
-                line.push_str(&format!(" {} group", repetition));
+                // line.push_str(&format!(" {} group", repetition));
+                map.insert(line.clone(), format!("{} group", repetition));
             }
 
             lines.push(line);
@@ -309,19 +317,31 @@ impl App {
                 let count = fields.len();
                 for (idx, child) in fields.iter().enumerate() {
                     let next_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
-                    traverse(child.as_ref(), next_prefix, idx == count - 1, lines);
+                    traverse(child.as_ref(), next_prefix, idx == count - 1, lines, map);
                 }
             }
+
         }
 
         let mut lines: Vec<String> = Vec::new();
         // Root line
         lines.push("└─ root (message)".to_string());
 
+        let mut column_to_type: HashMap<String, String> = HashMap::new();
+
         let children = root.get_fields();
         let count = children.len();
         for (idx, child) in children.iter().enumerate() {
-            traverse(child.as_ref(), "   ".to_string(), idx == count - 1, &mut lines);
+            traverse(child.as_ref(), "   ".to_string(), idx == count - 1, &mut lines, &mut column_to_type);
+        }
+
+        let max_len = lines.iter().map(|line| line.len()).max().unwrap_or(0);
+
+        for line in lines.iter_mut() {
+            if let Some(column_type) = column_to_type.get(line) {
+                let line_len = max_len + 3 - line.len();
+                line.push_str(&format!("{} {}", " ".repeat(line_len), column_type));
+            }
         }
 
         Ok(lines)
@@ -451,7 +471,9 @@ impl Widget for &App {
         file_name_para.render(file_name_area, buf);
 
         // Render the selection widget for the tabs (placeholder)
-        let tab_selector = Paragraph::new(Line::from("Schema").bold().fg(Color::Blue));
+        let tab_selector = Paragraph::new(
+            Line::from("Schema").bold().fg(Color::Blue)
+        );
         tab_selector.render(nav_tab, buf);
 
         // Build the table widget
@@ -479,12 +501,7 @@ impl Widget for &App {
             Err(e) => format!("Error reading schema: {}", e),
         };
 
-        let schema_para = Paragraph::new(schema_text)
-            .block(
-                Block::bordered()
-                    .title(Line::from("Schema".yellow().bold()).centered())
-                    .border_set(border::ROUNDED),
-            );
+        let schema_para = Paragraph::new(schema_text);
 
         schema_para.render(right_area, buf);
     }
