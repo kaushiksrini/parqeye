@@ -12,3 +12,5 @@ tokio = { version = "1", features = ["fs","io-util"] }  # async file I/O
 prettytable = "0.10"     # for nice CLI tables
 anyhow = "1.0.98"
 comfy-table    = "7"        # for tables with style & coloring
+ratatui = "0.29.0"
+crossterm = "0.29.0"
