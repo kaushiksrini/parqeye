@@ -9,7 +9,7 @@ use ratatui::{
     buffer::Buffer,
     crossterm::style::Color,
     layout::{Constraint, Layout, Rect},
-    style::Stylize,
+    style::{Stylize, Style, Modifier},
     symbols::border,
     text::{Line, Text},
     widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Tabs, Widget},
@@ -156,8 +156,10 @@ pub struct App {
     exit: bool,
     tabs: Vec<&'static str>,
     active_tab: usize,
+    column_selected: Option<usize>,
 }
 
+#[derive(Debug)]
 pub enum SchemaColumnType {
     // Just the root
     Root {name: String, display: String },
@@ -171,8 +173,9 @@ impl App {
     /// runs the application's main loop until the user quits
     pub fn run(&mut self, terminal: &mut DefaultTerminal, path: &str) -> io::Result<()> {
         self.file_name = path.to_string();
-        self.tabs = vec!["Schema", "Row Groups", "Stats", "Meta"];
+        self.tabs = vec!["Schema", "Row Groups"];
         self.active_tab = 0; // Schema selected by default
+        self.column_selected = None;
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
@@ -209,6 +212,32 @@ impl App {
             KeyCode::Left => {
                 if self.active_tab > 0 {
                     self.active_tab -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.active_tab == 0 {
+                    // schema tab: move selection down within leaf count
+                    if let Ok((lines, _)) = self.schema_tree_lines() {
+                        let total_columns: usize = lines.len();
+                        if let Some(idx) = self.column_selected {
+                            if idx + 1 < total_columns {
+                                self.column_selected = Some(idx + 1);
+                            }
+                        } else {
+                            self.column_selected = Some(1);
+                        }
+                    }
+                }
+            }
+            KeyCode::Up => {
+                if self.active_tab == 0 {
+                    if let Some(idx) = self.column_selected {
+                        if idx > 1 {
+                            self.column_selected = Some(idx - 1);
+                        } else {
+                            self.column_selected = None
+                        }
+                    }
                 }
             }
             _ => {}
@@ -425,8 +454,6 @@ impl App {
         Ok((lines, column_to_type))
     }
 }
-// ANCHOR_END: impl App
-
 
 
 #[derive(Default)]
@@ -604,7 +631,7 @@ impl Widget for &App {
 
                 // Build rows from primitives in order of appearance
                 let mut table_rows: Vec<Row> = Vec::new();
-                for line in &lines {
+                for (idx, line) in lines.iter().enumerate() {
                     let display = match line {
                         SchemaColumnType::Root {name: _, display: ref d} => {continue;},
                         SchemaColumnType::Primitive {name: _, display: ref d} => d,
@@ -613,20 +640,33 @@ impl Widget for &App {
                     if let Some(column_type) = col_map.get(display) {
                         match column_type {
                             ColumnType::Primitive(info) => {
-                                table_rows.push(Row::new(vec![
+                                let mut row = Row::new(vec![
                                     Cell::from(info.repetition.clone()),
                                     Cell::from(info.physical.clone()),
                                     Cell::from(info.logical.clone()),
                                     Cell::from(info.codec.clone()),
                                     Cell::from(info.encoding.clone()),
-                                ]));
+                                ]);
+                                if let Some(selected_index) = self.column_selected {
+                                    if idx == selected_index {
+                                        row = row.style(Style::default().bg(ratatui::prelude::Color::DarkGray));
+                                    }
+                                }
+                                table_rows.push(row);
                             }
                             ColumnType::Group(repetition) => {
-                                table_rows.push(Row::new(vec![
+                                let mut row = Row::new(vec![
                                     Cell::from(repetition.clone()),
                                     Cell::from("group"),
-                                ]));
+                                ]);
+                                if let Some(selected_index) = self.column_selected {
+                                    if idx == selected_index {
+                                        row = row.style(Style::default().bg(ratatui::prelude::Color::DarkGray));
+                                    }
+                                }
+                                table_rows.push(row);
                             }
+
                         }
                     }
                 }
@@ -647,11 +687,29 @@ impl Widget for &App {
                 ]);
 
                 let list = List::new(
-                    lines.iter().map(|line| {
+                    lines.iter().enumerate().map(|(idx, line)| {
                         match line {
-                            SchemaColumnType::Root {name: _, display: ref d} => ListItem::new(d.clone()).dark_gray(),
-                            SchemaColumnType::Primitive {name: _, display: ref d} => ListItem::new(d.clone()).blue(),
-                            SchemaColumnType::Group {name: _, display: ref d} => ListItem::new(d.clone()).green(),
+                            SchemaColumnType::Root {name: _, display: ref d} => {
+                                ListItem::new(d.clone()).dark_gray()
+                            },
+                            SchemaColumnType::Primitive {name: _, display: ref d} => {
+                                let mut item = ListItem::new(d.clone()).blue();
+                                if let Some(selected_index) = self.column_selected {
+                                    if idx == selected_index {
+                                        item = item.fg(Color::Yellow).bold();
+                                    }
+                                }
+                                item
+                            },
+                            SchemaColumnType::Group {name: _, display: ref d} => {
+                                let mut item: ListItem<'_> = ListItem::new(d.clone()).green();
+                                if let Some(selected_index) = self.column_selected {
+                                    if idx == selected_index {
+                                        item = item.fg(Color::Yellow).bold();
+                                    }
+                                }
+                                item
+                            }
                         }
                     }).collect::<Vec<ListItem>>()
                 ).block(Block::bordered().title(Line::from("Schema Tree").centered()).title_bottom(tree_info.centered()).border_set(border::ROUNDED));
