@@ -1,11 +1,8 @@
-// mod schema;
-// mod stats;
 mod utils;
 
 use clap::{Parser, Subcommand};
 use parquet::{basic::{LogicalType, TimeUnit}, file::reader::{FileReader, SerializedFileReader}};
 use std::{collections::{HashMap, HashSet}, fs::File, io, path::Path};
-// use schema::print_schema_table;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
@@ -15,7 +12,7 @@ use ratatui::{
     style::Stylize,
     symbols::border,
     text::{Line, Text},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Widget, Tabs},
+    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Tabs, Widget},
     DefaultTerminal, Frame,
 };
 
@@ -161,6 +158,15 @@ pub struct App {
     active_tab: usize,
 }
 
+pub enum SchemaColumnType {
+    // Just the root
+    Root {name: String, display: String },
+    // name, then display string
+    Primitive {name: String, display: String },
+    // name, then display string
+    Group {name: String, display: String }
+}
+
 impl App {
     /// runs the application's main loop until the user quits
     pub fn run(&mut self, terminal: &mut DefaultTerminal, path: &str) -> io::Result<()> {
@@ -208,7 +214,6 @@ impl App {
             _ => {}
         }
     }
-    // ANCHOR_END: handle_key_event fn
 
     fn exit(&mut self) {
         self.exit = true;
@@ -306,7 +311,7 @@ impl App {
     }
 
     /// Build a tree representation of the Parquet schema as a Vec of lines
-    fn schema_tree_lines(&self) -> Result<(Vec<String>, HashMap<String, ColumnType>), Box<dyn std::error::Error>> {
+    fn schema_tree_lines(&self) -> Result<(Vec<SchemaColumnType>, HashMap<String, ColumnType>), Box<dyn std::error::Error>> {
         use parquet::file::reader::{FileReader, SerializedFileReader};
 
         // Open file
@@ -343,7 +348,7 @@ impl App {
         }
 
         // Recursive traversal helper
-        fn traverse(node: &ParquetType, prefix: String, is_last: bool, lines: &mut Vec<String>, map: &mut HashMap<String, ColumnType>, leaf_idx: &mut usize, summaries: &Vec<(String,String)>) {
+        fn traverse(node: &ParquetType, prefix: String, is_last: bool, lines: &mut Vec<SchemaColumnType>, map: &mut HashMap<String, ColumnType>, leaf_idx: &mut usize, summaries: &Vec<(String,String)>) {
             let connector: &'static str = if is_last { "└─" } else { "├─" };
             let line = format!("{}{} {}", prefix, connector, node.name());
 
@@ -382,16 +387,16 @@ impl App {
                     encoding: enc_sum.clone(),
                 };
                 map.insert(line.clone(), ColumnType::Primitive(column_info));
-
+                lines.push(SchemaColumnType::Primitive {name: node.name().to_string(), display: line});
+                
                 *leaf_idx += 1;
             } else {
                 // Group / map etc.
                 let repetition = format!("{:?}", node.get_basic_info().repetition());
                 // line.push_str(&format!(" {} group", repetition));
                 map.insert(line.clone(), ColumnType::Group(repetition));
+                lines.push(SchemaColumnType::Group {name: node.name().to_string(), display: line});
             }
-
-            lines.push(line);
 
             if node.is_group() {
                 let fields = node.get_fields();
@@ -404,9 +409,9 @@ impl App {
 
         }
 
-        let mut lines: Vec<String> = Vec::new();
+        let mut lines: Vec<SchemaColumnType> = Vec::new();
         // Root line
-        lines.push("└─ root (message)".to_string());
+        lines.push(SchemaColumnType::Root {name: "root".to_string(), display: "└─ root (message)".to_string()});
 
         let mut column_to_type: HashMap<String, ColumnType> = HashMap::new();
 
@@ -416,16 +421,6 @@ impl App {
         for (idx, child) in children.iter().enumerate() {
             traverse(child.as_ref(), "   ".to_string(), idx == count - 1, &mut lines, &mut column_to_type, &mut leaf_idx, &leaf_summaries);
         }
-
-        let max_len = lines.iter().map(|line| line.len()).max().unwrap_or(0);
-
-        // for line in lines.iter_mut() {
-        //     if let Some(column_type) = column_to_type.get(line) {
-        //         let has_subchild_char: bool = line.contains("└─");
-        //         let line_len = max_len + 3 - line.len();
-        //         line.push_str(&format!("{} {:?}", " ".repeat(line_len), column_type));
-        //     }
-        // }
 
         Ok((lines, column_to_type))
     }
@@ -446,11 +441,7 @@ pub struct TableView {
     pub selected_tab: TableTab,
 }
 
-// impl Widget for TableView {
 
-// }
-
-// ANCHOR: impl Widget
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Build the surrounding block with title and instructions
@@ -603,12 +594,23 @@ impl Widget for &App {
                     }
                 };
 
-                let tree_width = lines.iter().map(|line| line.len()).max().unwrap_or(0);
+                let tree_width = lines.iter().map(|line| {
+                    match line {
+                        SchemaColumnType::Root {name: _, display: ref d} => d.len(),
+                        SchemaColumnType::Primitive {name: _, display: ref d} => d.len(),
+                        SchemaColumnType::Group {name: _, display: ref d} => d.len(),
+                    }
+                }).max().unwrap_or(0);
 
                 // Build rows from primitives in order of appearance
                 let mut table_rows: Vec<Row> = Vec::new();
                 for line in &lines {
-                    if let Some(column_type) = col_map.get(line) {
+                    let display = match line {
+                        SchemaColumnType::Root {name: _, display: ref d} => {continue;},
+                        SchemaColumnType::Primitive {name: _, display: ref d} => d,
+                        SchemaColumnType::Group {name: _, display: ref d} => d,
+                    };
+                    if let Some(column_type) = col_map.get(display) {
                         match column_type {
                             ColumnType::Primitive(info) => {
                                 table_rows.push(Row::new(vec![
@@ -638,9 +640,22 @@ impl Widget for &App {
                 .areas(content_area);
 
                 // Render tree text
-                let tree_para = Paragraph::new(lines.join("\n"))
-                    .block(Block::bordered().title(Line::from("Schema Tree").centered()).border_set(border::ROUNDED));
-                tree_para.render(tree_area, buf);
+                let tree_info = Line::from(vec![
+                    "Leaf".blue(),
+                    ", ".into(),
+                    "Group".green(),
+                ]);
+
+                let list = List::new(
+                    lines.iter().map(|line| {
+                        match line {
+                            SchemaColumnType::Root {name: _, display: ref d} => ListItem::new(d.clone()).dark_gray(),
+                            SchemaColumnType::Primitive {name: _, display: ref d} => ListItem::new(d.clone()).blue(),
+                            SchemaColumnType::Group {name: _, display: ref d} => ListItem::new(d.clone()).green(),
+                        }
+                    }).collect::<Vec<ListItem>>()
+                ).block(Block::bordered().title(Line::from("Schema Tree").centered()).title_bottom(tree_info.centered()).border_set(border::ROUNDED));
+                list.render(tree_area, buf);
 
                 // Vertical separator
                 let sep_block = Block::default().borders(Borders::RIGHT).fg(Color::Yellow);
@@ -652,7 +667,7 @@ impl Widget for &App {
                     Constraint::Length(10),
                     Constraint::Length(10),
                     Constraint::Length(18),
-                    Constraint::Length(12),
+                    Constraint::Length(8),
                     Constraint::Min(10),
                 ];
                 let table_widget = Table::new(table_rows, col_constraints)
