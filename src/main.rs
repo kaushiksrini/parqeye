@@ -3,7 +3,7 @@
 mod utils;
 
 use clap::{Parser, Subcommand};
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::{basic::{LogicalType, TimeUnit}, file::reader::{FileReader, SerializedFileReader}};
 use std::{collections::{HashMap, HashSet}, fs::File, io, path::Path};
 // use schema::print_schema_table;
 
@@ -15,7 +15,7 @@ use ratatui::{
     style::Stylize,
     symbols::border,
     text::{Line, Text},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Widget},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Widget, Tabs},
     DefaultTerminal, Frame,
 };
 
@@ -137,16 +137,36 @@ pub struct ParquetFileMetadata {
     avg_row_size: u64,
 }
 
+#[derive(Debug)]
+pub struct ColumnSchemaInfo {
+    pub name: String,
+    pub repetition: String,
+    pub physical: String,
+    pub logical: String,
+    pub codec: String,
+    pub encoding: String,
+}
+
+#[derive(Debug)]
+pub enum ColumnType {
+    Primitive(ColumnSchemaInfo),
+    Group(String),
+}
+
 #[derive(Debug, Default)]
 pub struct App {
     file_name: String,
     exit: bool,
+    tabs: Vec<&'static str>,
+    active_tab: usize,
 }
 
 impl App {
     /// runs the application's main loop until the user quits
     pub fn run(&mut self, terminal: &mut DefaultTerminal, path: &str) -> io::Result<()> {
         self.file_name = path.to_string();
+        self.tabs = vec!["Schema", "Row Groups", "Stats", "Meta"];
+        self.active_tab = 0; // Schema selected by default
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
@@ -175,6 +195,16 @@ impl App {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
+            KeyCode::Right => {
+                if self.active_tab + 1 < self.tabs.len() {
+                    self.active_tab += 1;
+                }
+            }
+            KeyCode::Left => {
+                if self.active_tab > 0 {
+                    self.active_tab -= 1;
+                }
+            }
             _ => {}
         }
     }
@@ -276,17 +306,44 @@ impl App {
     }
 
     /// Build a tree representation of the Parquet schema as a Vec of lines
-    fn schema_tree_lines(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    fn schema_tree_lines(&self) -> Result<(Vec<String>, HashMap<String, ColumnType>), Box<dyn std::error::Error>> {
         use parquet::file::reader::{FileReader, SerializedFileReader};
 
         // Open file
         let file = File::open(&Path::new(self.file_name.as_str()))?;
         let reader: SerializedFileReader<File> = SerializedFileReader::new(file)?;
-        let schema_descr = reader.metadata().file_metadata().schema_descr();
+        let md = reader.metadata();
+        let schema_descr = md.file_metadata().schema_descr();
         let root = schema_descr.root_schema();
 
+        // ------------------------------------------------------------------
+        // Pre-compute codec + encoding summary for every leaf column
+        // ------------------------------------------------------------------
+        let mut leaf_summaries: Vec<(String, String)> = Vec::new(); // (codec_summary, enc_summary)
+        for (col_idx, _col_descr) in schema_descr.columns().iter().enumerate() {
+            use std::collections::HashSet;
+            let mut codecs: HashSet<String> = HashSet::new();
+            let mut encs: HashSet<String> = HashSet::new();
+            for rg in md.row_groups() {
+                let col_chunk = rg.column(col_idx);
+                codecs.insert(format!("{:?}", col_chunk.compression()));
+                for enc in col_chunk.encodings() {
+                    encs.insert(format!("{:?}", enc));
+                }
+            }
+            let mut codec_vec: Vec<String> = codecs.into_iter().collect();
+            codec_vec.sort();
+            let codec_summary = codec_vec.join(", ");
+
+            let mut enc_vec: Vec<String> = encs.into_iter().collect();
+            enc_vec.sort();
+            let enc_summary = enc_vec.join(", ");
+
+            leaf_summaries.push((codec_summary, enc_summary));
+        }
+
         // Recursive traversal helper
-        fn traverse(node: &ParquetType, prefix: String, is_last: bool, lines: &mut Vec<String>, map: &mut HashMap<String, String>) {
+        fn traverse(node: &ParquetType, prefix: String, is_last: bool, lines: &mut Vec<String>, map: &mut HashMap<String, ColumnType>, leaf_idx: &mut usize, summaries: &Vec<(String,String)>) {
             let connector: &'static str = if is_last { "└─" } else { "├─" };
             let line = format!("{}{} {}", prefix, connector, node.name());
 
@@ -296,18 +353,42 @@ impl App {
                 let repetition = format!("{:?}", node.get_basic_info().repetition());
                 let physical = format!("{:?}", node.get_physical_type());
                 let logical = match node.get_basic_info().logical_type() {
-                    Some(logical) => format!("[{:?}]", logical),
-                    None => "".to_string(),
+                    Some(logical) => match logical {
+                        LogicalType::Decimal { scale, precision } => format!("Decimal (scale={}, precision={})", scale, precision),
+                        LogicalType::Integer { bit_width, is_signed } => format!("Integer (bit_width={}, is_signed={})", bit_width, is_signed),
+                        LogicalType::Time { is_adjusted_to_u_t_c, unit } => match unit {
+                            TimeUnit::MILLIS(_) => format!("Time (utc={}, unit=millis)", is_adjusted_to_u_t_c),
+                            TimeUnit::MICROS(_) => format!("Time (utc={}, unit=micros)", is_adjusted_to_u_t_c),
+                            TimeUnit::NANOS(_) => format!("Time (utc={}, unit=nanos)", is_adjusted_to_u_t_c),
+                        },
+                        LogicalType::Timestamp { is_adjusted_to_u_t_c, unit } => match unit {
+                            TimeUnit::MILLIS(_) => format!("Timestamp (utc={}, unit=millis)", is_adjusted_to_u_t_c),
+                            TimeUnit::MICROS(_) => format!("Timestamp (utc={}, unit=micros)", is_adjusted_to_u_t_c),
+                            TimeUnit::NANOS(_) => format!("Timestamp (utc={}, unit=nanos)", is_adjusted_to_u_t_c),
+                        },
+                        _ => format!("{:?}", logical),
+                    },
+                    None => String::new(),
                 };
-                let codecs = 
 
-                // line.push_str(&format!(" {} | {}", repetition, physical));
-                map.insert(line.clone(), format!("{} | {} {}", repetition, physical, logical));
+                // codec & encoding summary from pre-computed vector
+                let (codec_sum, enc_sum) = &summaries[*leaf_idx];
+                let column_info = ColumnSchemaInfo {
+                    name: node.name().to_string(),
+                    repetition: repetition.clone(),
+                    physical: physical.clone(),
+                    logical: logical.clone(),
+                    codec: codec_sum.clone(),
+                    encoding: enc_sum.clone(),
+                };
+                map.insert(line.clone(), ColumnType::Primitive(column_info));
+
+                *leaf_idx += 1;
             } else {
                 // Group / map etc.
                 let repetition = format!("{:?}", node.get_basic_info().repetition());
                 // line.push_str(&format!(" {} group", repetition));
-                map.insert(line.clone(), format!("{} group", repetition));
+                map.insert(line.clone(), ColumnType::Group(repetition));
             }
 
             lines.push(line);
@@ -317,7 +398,7 @@ impl App {
                 let count = fields.len();
                 for (idx, child) in fields.iter().enumerate() {
                     let next_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
-                    traverse(child.as_ref(), next_prefix, idx == count - 1, lines, map);
+                    traverse(child.as_ref(), next_prefix, idx == count - 1, lines, map, leaf_idx, summaries);
                 }
             }
 
@@ -327,24 +408,26 @@ impl App {
         // Root line
         lines.push("└─ root (message)".to_string());
 
-        let mut column_to_type: HashMap<String, String> = HashMap::new();
+        let mut column_to_type: HashMap<String, ColumnType> = HashMap::new();
 
         let children = root.get_fields();
         let count = children.len();
+        let mut leaf_idx: usize = 0;
         for (idx, child) in children.iter().enumerate() {
-            traverse(child.as_ref(), "   ".to_string(), idx == count - 1, &mut lines, &mut column_to_type);
+            traverse(child.as_ref(), "   ".to_string(), idx == count - 1, &mut lines, &mut column_to_type, &mut leaf_idx, &leaf_summaries);
         }
 
         let max_len = lines.iter().map(|line| line.len()).max().unwrap_or(0);
 
-        for line in lines.iter_mut() {
-            if let Some(column_type) = column_to_type.get(line) {
-                let line_len = max_len + 3 - line.len();
-                line.push_str(&format!("{} {}", " ".repeat(line_len), column_type));
-            }
-        }
+        // for line in lines.iter_mut() {
+        //     if let Some(column_type) = column_to_type.get(line) {
+        //         let has_subchild_char: bool = line.contains("└─");
+        //         let line_len = max_len + 3 - line.len();
+        //         line.push_str(&format!("{} {:?}", " ".repeat(line_len), column_type));
+        //     }
+        // }
 
-        Ok(lines)
+        Ok((lines, column_to_type))
     }
 }
 // ANCHOR_END: impl App
@@ -381,7 +464,7 @@ impl Widget for &App {
 
         block.render(area, buf);
 
-        let [left_area, right_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(4)])
+        let [left_area, right_area] = Layout::horizontal([Constraint::Fill(2), Constraint::Fill(5)])
             .margin(1)
             .areas(inner_area);
 
@@ -460,26 +543,22 @@ impl Widget for &App {
             .collect();
 
         // Split left pane vertically: file name block on top, metadata table below
-        let [file_name_area, table_container_area, nav_tab] = Layout::vertical([
+        let [file_name_area, table_container_area, _spacer] = Layout::vertical([
             Constraint::Length(3),
+            Constraint::Max(11),
             Constraint::Fill(1),
-            Constraint::Length(3),
         ])
         .areas(nav_area);
 
         // Render the file name block
         file_name_para.render(file_name_area, buf);
 
-        // Render the selection widget for the tabs (placeholder)
-        let tab_selector = Paragraph::new(
-            Line::from("Schema").bold().fg(Color::Blue)
-        );
-        tab_selector.render(nav_tab, buf);
 
         // Build the table widget
         let desired_height = (rows.len() as u16 + 2).min(table_container_area.height);
-        let desired_width = table_width_est.min(table_container_area.width as usize) as u16;
-        let table = Table::new(rows, vec![Constraint::Length(max_key_len as u16), Constraint::Min(10)])
+        // The table should span the full horizontal space available
+        let table_full_width = table_container_area.width;
+        let table = Table::new(rows, vec![Constraint::Length(max_key_len as u16), Constraint::Min(max_key_len as u16)])
             .column_spacing(1)
             .block(metadata_block);
 
@@ -487,22 +566,108 @@ impl Widget for &App {
         let table_area = ratatui::layout::Rect {
             x: table_container_area.x,
             y: table_container_area.y,
-            width: desired_width,
+            width: table_full_width,
             height: desired_height,
         };
 
         table.render(table_area, buf);
 
         // --------------------------------------------------
-        // Right area: Parquet schema tree view
+        // Right area: Tabs and content
         // --------------------------------------------------
-        let schema_text = match self.schema_tree_lines() {
-            Ok(lines) => lines.join("\n"),
-            Err(e) => format!("Error reading schema: {}", e),
-        };
 
-        let schema_para = Paragraph::new(schema_text);
+        let [tabs_bar_area, content_area] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Fill(1),
+        ])
+        .areas(right_area);
 
-        schema_para.render(right_area, buf);
+        // Build Tabs widget
+        let tab_titles: Vec<Line> = self.tabs.iter().map(|t| Line::from(*t)).collect();
+        let tabs_widget = Tabs::new(tab_titles)
+            .select(self.active_tab)
+            .block(Block::bordered().title("Tabs"));
+
+        tabs_widget.render(tabs_bar_area, buf);
+
+        // Render content based on selected tab
+        match self.active_tab {
+            0 => { // Schema view split (tree | table)
+                let (lines, col_map) = match self.schema_tree_lines() {
+                    Ok(res) => res,
+                    Err(e) => {
+                        let err_para = Paragraph::new(format!("Error reading schema: {}", e))
+                            .block(Block::bordered().title("Schema").border_set(border::ROUNDED));
+                        err_para.render(content_area, buf);
+                        return;
+                    }
+                };
+
+                let tree_width = lines.iter().map(|line| line.len()).max().unwrap_or(0);
+
+                // Build rows from primitives in order of appearance
+                let mut table_rows: Vec<Row> = Vec::new();
+                for line in &lines {
+                    if let Some(column_type) = col_map.get(line) {
+                        match column_type {
+                            ColumnType::Primitive(info) => {
+                                table_rows.push(Row::new(vec![
+                                    Cell::from(info.repetition.clone()),
+                                    Cell::from(info.physical.clone()),
+                                    Cell::from(info.logical.clone()),
+                                    Cell::from(info.codec.clone()),
+                                    Cell::from(info.encoding.clone()),
+                                ]));
+                            }
+                            ColumnType::Group(repetition) => {
+                                table_rows.push(Row::new(vec![
+                                    Cell::from(repetition.clone()),
+                                    Cell::from("group"),
+                                ]));
+                            }
+                        }
+                    }
+                }
+
+                // Layout: tree | separator | table
+                let [tree_area, sep_area, table_area] = Layout::horizontal([
+                    Constraint::Length(tree_width as u16),
+                    Constraint::Length(1),
+                    Constraint::Fill(1),
+                ])
+                .areas(content_area);
+
+                // Render tree text
+                let tree_para = Paragraph::new(lines.join("\n"))
+                    .block(Block::bordered().title(Line::from("Schema Tree").centered()).border_set(border::ROUNDED));
+                tree_para.render(tree_area, buf);
+
+                // Vertical separator
+                let sep_block = Block::default().borders(Borders::RIGHT).fg(Color::Yellow);
+                sep_block.render(sep_area, buf);
+
+                // Table of columns
+                let header = vec!["Rep", "Physical", "Logical", "Codec", "Encoding"];
+                let col_constraints = vec![
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                    Constraint::Length(18),
+                    Constraint::Length(12),
+                    Constraint::Min(10),
+                ];
+                let table_widget = Table::new(table_rows, col_constraints)
+                    .header(Row::new(header.into_iter().map(|h| Cell::from(h).bold().fg(Color::Green))))
+                    .column_spacing(1)
+                    .block(Block::bordered().title(Line::from("Columns").centered()).border_set(border::ROUNDED));
+
+                table_widget.render(table_area, buf);
+            }
+            _ => {
+                let placeholder = Paragraph::new("Coming soon...")
+                    .block(Block::bordered().title(Line::from(self.tabs[self.active_tab]).centered()).border_set(border::ROUNDED));
+                placeholder.render(content_area, buf);
+            }
+        }
+        
     }
 }
