@@ -1,214 +1,141 @@
-// src/schema.rs
-
-use anyhow::Result;
-use comfy_table::{
-    Cell, Color, Table,
-    presets::UTF8_FULL,
-    modifiers::UTF8_ROUND_CORNERS,
-    Attribute,
-};
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use std::collections::HashMap;
 use std::fs::File;
-use parquet::basic::Type as PhysicalType;
-use parquet::file::metadata::ParquetMetaData;
+use std::path::Path;
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::basic::{LogicalType, TimeUnit};
+use parquet::schema::types::{Type as ParquetType};
 
-/// Read the file and return the Parquet reader
-fn open_reader(path: &str) -> Result<SerializedFileReader<File>> {
-    let file = File::open(path)?;
-    let reader = SerializedFileReader::new(file)?;
-    Ok(reader)
+#[derive(Debug)]
+pub struct ColumnSchemaInfo {
+    pub name: String,
+    pub repetition: String,
+    pub physical: String,
+    pub logical: String,
+    pub codec: String,
+    pub converted_type: String,
+    pub encoding: String,
 }
 
-/// Print a table of the schema: one row per leaf column descriptor.
-pub fn print_schema_table(path: &str, show_stats: bool) -> Result<()> {
-    // 1) open and get metadata
-    let reader = open_reader(path)?;
+#[derive(Debug)]
+pub enum ColumnType {
+    Primitive(ColumnSchemaInfo),
+    Group(String),
+}
+
+#[derive(Debug)]
+pub enum SchemaColumnType {
+    Root {name: String, display: String },
+    Primitive {name: String, display: String },
+    Group {name: String, display: String }
+}
+
+pub fn build_schema_tree_lines(file_name: &str) -> Result<(Vec<SchemaColumnType>, HashMap<String, ColumnType>), Box<dyn std::error::Error>> {
+    let file = File::open(&Path::new(file_name))?;
+    let reader: SerializedFileReader<File> = SerializedFileReader::new(file)?;
     let md = reader.metadata();
-    let schema = md.file_metadata().schema_descr();
+    let schema_descr = md.file_metadata().schema_descr();
+    let root = schema_descr.root_schema();
 
-    // 2) build comfy-table
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL).apply_modifier(UTF8_ROUND_CORNERS);
+    // Pre-compute codec + encoding summary for every leaf column
+    let mut leaf_summaries: Vec<(String, String)> = Vec::new();
+    for (col_idx, _) in schema_descr.columns().iter().enumerate() {
+        use std::collections::HashSet;
+        let mut codecs: HashSet<String> = HashSet::new();
+        let mut encs: HashSet<String> = HashSet::new();
 
-    // Build header cells dynamically based on flag
-    let mut header_cells: Vec<Cell> = vec![
-        Cell::new("#")
-            .fg(Color::Green)
-            .add_attribute(Attribute::Bold),
-        Cell::new("Column Path")
-            .fg(Color::Green)
-            .add_attribute(Attribute::Bold),
-        Cell::new("Physical Type")
-            .fg(Color::Green)
-            .add_attribute(Attribute::Bold),
-        Cell::new("Logical Type")
-            .fg(Color::Green)
-            .add_attribute(Attribute::Bold),
-        Cell::new("Max Rep/Def\nLevel")
-            .fg(Color::Green)
-            .add_attribute(Attribute::Bold),
-        Cell::new("Codec")
-            .fg(Color::Green)
-            .add_attribute(Attribute::Bold),
-        Cell::new("Encodings")
-            .fg(Color::Green)
-            .add_attribute(Attribute::Bold),
-    ];
+        for rg in md.row_groups() {
+            let col_chunk = rg.column(col_idx);
+            codecs.insert(format!("{:?}", col_chunk.compression()));
+            for enc in col_chunk.encodings() {
+                encs.insert(format!("{:?}", enc));
+            }
+        }
+        let mut codec_vec: Vec<String> = codecs.into_iter().collect();
+        codec_vec.sort();
+        let codec_summary = codec_vec.join(", ");
 
-    if show_stats {
-        header_cells.push(
-            Cell::new("Stats")
-                .fg(Color::Green)
-                .add_attribute(Attribute::Bold),
-        );
+        let mut enc_vec: Vec<String> = encs.into_iter().collect();
+        enc_vec.sort();
+        let enc_summary = enc_vec.join(", ");
+
+        leaf_summaries.push((codec_summary, enc_summary));
     }
 
-    table.set_header(header_cells);
+    fn traverse(
+        node: &ParquetType, 
+        prefix: String, 
+        is_last: bool, 
+        lines: &mut Vec<SchemaColumnType>, 
+        map: &mut HashMap<String, ColumnType>, 
+        leaf_idx: &mut usize, 
+        summaries: &Vec<(String,String)>
+    ) {
+        let connector: &'static str = if is_last { "└─" } else { "├─" };
+        let line = format!("{}{} {}", prefix, connector, node.name());
 
-    // 3) iterate leaf columns
-    for (i, col) in schema.columns().iter().enumerate() {
-        let path = col.path();
-        let physical_ty = col.physical_type();
-        let physical = format!("{:?}", physical_ty);
-        let logical = col
-            .logical_type()
-            .map(|lt| format!("{:?}", lt))
-            .unwrap_or_else(|| "—".to_string());
-        let repetition = format!("{:?}", col.max_rep_level());
-        let definition = format!("{:?}", col.max_def_level());
+        if node.is_primitive() {
+            let repetition = format!("{:?}", node.get_basic_info().repetition());
+            let physical = format!("{:?}", node.get_physical_type());
+            let logical = match node.get_basic_info().logical_type() {
+                Some(logical) => match logical {
+                    LogicalType::Decimal { scale, precision } => format!("Decimal({},{})", scale, precision),
+                    LogicalType::Integer { bit_width, is_signed } => format!("Integer({},{})", bit_width, if is_signed { "sign" } else { "unsign" }),
+                    LogicalType::Time { is_adjusted_to_u_t_c, unit } => match unit {
+                        TimeUnit::MILLIS(_) => format!("Time({}, millis)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                        TimeUnit::MICROS(_) => format!("Time({}, micros)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                        TimeUnit::NANOS(_) => format!("Time({}, nanos)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                    },
+                    LogicalType::Timestamp { is_adjusted_to_u_t_c, unit } => match unit {
+                        TimeUnit::MILLIS(_) => format!("Timestamp({}, millis)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                        TimeUnit::MICROS(_) => format!("Timestamp({}, micros)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                        TimeUnit::NANOS(_) => format!("Timestamp({}, nanos)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                    },
+                    _ => format!("{:?}", logical),
+                },
+                None => String::new(),
+            };
 
-        // Stats computation based on flag
-        let stats = if show_stats {
-            Some(stats_summary(&md, i, physical_ty))
+            let (codec_sum, enc_sum) = &summaries[*leaf_idx];
+            let column_info = ColumnSchemaInfo {
+                name: node.name().to_string(),
+                repetition: repetition.clone(),
+                physical: physical.clone(),
+                logical: logical.clone(),
+                codec: codec_sum.clone(),
+                encoding: enc_sum.clone(),
+                converted_type: node.get_basic_info().converted_type().to_string(),
+            };
+            map.insert(line.clone(), ColumnType::Primitive(column_info));
+            lines.push(SchemaColumnType::Primitive {name: node.name().to_string(), display: line});
+            
+            *leaf_idx += 1;
         } else {
-            None
-        };
-
-        // Gather codec and encoding summary for this column
-        let (codec_summary, enc_summary) = codec_and_encoding_summary(&md, i);
-
-        // Build row dynamically
-        let mut row_cells: Vec<Cell> = vec![
-            Cell::new(i).fg(Color::Cyan),
-            Cell::new(path).fg(Color::Cyan),
-            Cell::new(physical),
-            Cell::new(logical),
-            Cell::new(format!("{} / {}", repetition, definition)),
-            Cell::new(codec_summary),
-            Cell::new(enc_summary),
-        ];
-
-        if let Some(stats_val) = stats {
-            row_cells.push(Cell::new(stats_val));
+            let repetition = format!("{:?}", node.get_basic_info().repetition());
+            map.insert(line.clone(), ColumnType::Group(repetition));
+            lines.push(SchemaColumnType::Group {name: node.name().to_string(), display: line});
         }
 
-        table.add_row(row_cells);
-    }
-
-    // 4) print it
-    println!("\n{}", table);
-    Ok(())
-}
-
-// ------------------------------------------------------------
-// Helper functions for statistics
-// ------------------------------------------------------------
-
-/// Decode raw Parquet statistics bytes into a readable string based on the physical type.
-fn decode_value(bytes: &[u8], physical: PhysicalType) -> String {
-    match physical {
-        PhysicalType::INT32 if bytes.len() == 4 => {
-            let v = i32::from_le_bytes(bytes.try_into().unwrap());
-            format!("{}", v)
-        }
-        PhysicalType::INT64 if bytes.len() == 8 => {
-            let v: i64 = i64::from_le_bytes(bytes.try_into().unwrap());
-            format!("{}", v)
-        }
-        PhysicalType::FLOAT if bytes.len() == 4 => {
-            let v = f32::from_le_bytes(bytes.try_into().unwrap());
-            format!("{:.4}", v)
-        }
-        PhysicalType::DOUBLE if bytes.len() == 8 => {
-            let v = f64::from_le_bytes(bytes.try_into().unwrap());
-            format!("{:.4}", v)
-        }
-        PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => match std::str::from_utf8(bytes) {
-            Ok(s) => s.to_string(),
-            Err(_) => bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(""),
-        },
-        _ => bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(""),
-    }
-}
-
-/// Summarise statistics (min/max/null/distinct) for a column across all row groups.
-fn stats_summary(md: &ParquetMetaData, col_idx: usize, physical: PhysicalType) -> String {
-
-    let mut min_bytes: Option<Vec<u8>> = None;
-    let mut max_bytes: Option<Vec<u8>> = None;
-    let mut nulls: u64 = 0;
-    let mut distinct: Option<u64> = None;
-
-    for rg in md.row_groups() {
-        let col_meta = rg.column(col_idx);
-        if let Some(stats) = col_meta.statistics() {
-            if let Some(n) = stats.null_count_opt() {
-                nulls += n as u64;
-            }
-            if let Some(d) = stats.distinct_count_opt() {
-                distinct = Some(distinct.unwrap_or(0) + d as u64);
-            }
-            if let Some(min) = stats.min_bytes_opt() {
-                if min_bytes.is_none() || min < &min_bytes.as_ref().unwrap()[..] {
-                    min_bytes = Some(min.to_vec());
-                }
-            }
-            if let Some(max) = stats.max_bytes_opt() {
-                if max_bytes.is_none() || max > &max_bytes.as_ref().unwrap()[..] {
-                    max_bytes = Some(max.to_vec());
-                }
+        if node.is_group() {
+            let fields = node.get_fields();
+            let count = fields.len();
+            for (idx, child) in fields.iter().enumerate() {
+                let next_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
+                traverse(child.as_ref(), next_prefix, idx == count - 1, lines, map, leaf_idx, summaries);
             }
         }
     }
 
-    let min_str = min_bytes
-        .as_deref()
-        .map(|b: &[u8]| decode_value(b, physical))
-        .unwrap_or_else(|| "—".to_string());
-    let max_str = max_bytes
-        .as_deref()
-        .map(|b| decode_value(b, physical))
-        .unwrap_or_else(|| "—".to_string());
+    let mut lines: Vec<SchemaColumnType> = Vec::new();
+    lines.push(SchemaColumnType::Root {name: "root".to_string(), display: "└─ root (message)".to_string()});
 
-    if let Some(dist) = distinct {
-        format!("min={}, max={}, nulls={}, distinct={}", min_str, max_str, nulls, dist)
-    } else {
-        format!("min={}, max={}, nulls={}", min_str, max_str, nulls)
-    }
-}
-
-/// Summarise codec and encodings used for a column across all row groups.
-fn codec_and_encoding_summary(md: &ParquetMetaData, col_idx: usize) -> (String, String) {
-    use std::collections::HashSet;
-
-    let mut codecs: HashSet<String> = HashSet::new();
-    let mut encs: HashSet<String> = HashSet::new();
-
-    for rg in md.row_groups() {
-        let col = rg.column(col_idx);
-        codecs.insert(format!("{:?}", col.compression()));
-        for enc in col.encodings() {
-            encs.insert(format!("{:?}", enc));
-        }
+    let mut column_to_type: HashMap<String, ColumnType> = HashMap::new();
+    let children = root.get_fields();
+    let count = children.len();
+    let mut leaf_idx: usize = 0;
+    
+    for (idx, child) in children.iter().enumerate() {
+        traverse(child.as_ref(), "   ".to_string(), idx == count - 1, &mut lines, &mut column_to_type, &mut leaf_idx, &leaf_summaries);
     }
 
-    let mut codec_vec: Vec<String> = codecs.into_iter().collect();
-    codec_vec.sort();
-    let codec_str = codec_vec.join(", ");
-
-    let mut enc_vec: Vec<String> = encs.into_iter().collect();
-    enc_vec.sort();
-    let enc_str = enc_vec.join(", ");
-
-    (codec_str, enc_str)
+    Ok((lines, column_to_type))
 }
