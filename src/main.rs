@@ -408,8 +408,10 @@ impl App {
         // Average row size
         let avg_row_size = if total_rows > 0 { raw_size as f64 / total_rows as f64 } else { 0.0 };
 
+        /// just get the file name without the path
+        let file_name = self.file_name.split("/").last().unwrap().to_string();
         Ok(ParquetFileMetadata {
-            file_name: self.file_name.clone(),
+            file_name,
             format_version: version.to_string(),
             created_by: created_by.to_string(),
             rows: total_rows as u64,
