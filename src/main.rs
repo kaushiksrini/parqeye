@@ -131,11 +131,13 @@ fn decode_value(bytes: &[u8], physical: PhysicalType) -> String {
 }
 
 /// Aggregate statistics (total values, min, max, nulls, distinct) for the given column across all row groups.
-fn aggregate_column_stats(md: &ParquetMetaData, col_idx: usize, physical: PhysicalType) -> (Option<String>, Option<String>, u64, Option<u64>) {
+fn aggregate_column_stats(md: &ParquetMetaData, col_idx: usize, physical: PhysicalType) -> ColumnStats {
     let mut min_bytes: Option<Vec<u8>> = None;
     let mut max_bytes: Option<Vec<u8>> = None;
     let mut nulls: u64 = 0;
     let mut distinct: Option<u64> = None;
+    let mut total_compressed_size: u64 = 0;
+    let mut total_uncompressed_size: u64 = 0;
 
     for rg in md.row_groups() {
         let col_meta = rg.column(col_idx);
@@ -156,23 +158,246 @@ fn aggregate_column_stats(md: &ParquetMetaData, col_idx: usize, physical: Physic
                     max_bytes = Some(max_b.to_vec());
                 }
             }
+
+            total_compressed_size += col_meta.compressed_size() as u64;
+            total_uncompressed_size += col_meta.uncompressed_size() as u64;
         }
     }
 
     let min_str = min_bytes.as_deref().map(|b| decode_value(b, physical));
     let max_str = max_bytes.as_deref().map(|b| decode_value(b, physical));
 
-    (min_str, max_str, nulls, distinct)
+    ColumnStats {
+        min: min_str,
+        max: max_str,
+        nulls,
+        distinct,
+        total_compressed_size,
+        total_uncompressed_size,
+    }
 }
 
-use parquet::column::reader::ColumnReader;
-// Removed unused data_type imports to avoid compilation issues
+/// Extract dictionary values from dictionary pages for dictionary-encoded columns.
+/// This implementation manually parses the dictionary page format for common types.
+fn extract_dictionary_values(reader: &SerializedFileReader<File>, col_idx: usize, max_items: usize) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    use parquet::basic::PageType;
+    
+    let mut dictionary_values = Vec::new();
+    let metadata = reader.metadata();
+    let schema_descr = metadata.file_metadata().schema_descr();
+    let column_descr = schema_descr.column(col_idx);
+    let physical_type = column_descr.physical_type();
 
-/// Sample up to `max_items` unique values from the column to present a dictionary preview.
-fn sample_dictionary(_reader: &SerializedFileReader<File>, _col_idx: usize, _physical: PhysicalType, _max_items: usize) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    // TODO: Implement robust dictionary sampling compatible with current parquet crate API.
-    // For now, return empty vector so the stats panel still renders.
-    Ok(Vec::new())
+    // Iterate through all row groups to find dictionary pages
+    for rg_idx in 0..reader.num_row_groups() {
+        let rg_reader = reader.get_row_group(rg_idx)?;
+        let mut page_reader = rg_reader.get_column_page_reader(col_idx)?;
+        
+        // Read pages to find dictionary page first
+        while let Some(page) = page_reader.get_next_page()? {
+            if page.page_type() == PageType::DICTIONARY_PAGE {
+                let page_buffer = page.buffer();
+                let num_values = page.num_values() as usize;
+                
+                // Manual parsing based on physical type and PLAIN encoding (most common for dictionary pages)
+                match physical_type {
+                    parquet::basic::Type::BYTE_ARRAY => {
+                        // BYTE_ARRAY PLAIN encoding: [length:4][data:length][length:4][data:length]...
+                        let mut offset = 0;
+                        let buffer_slice = &page_buffer[..];
+                        
+                        for _ in 0..num_values.min(max_items) {
+                            if offset + 4 > buffer_slice.len() {
+                                break;
+                            }
+                            
+                            // Read length (little-endian u32)
+                            let length = u32::from_le_bytes([
+                                buffer_slice[offset],
+                                buffer_slice[offset + 1],
+                                buffer_slice[offset + 2],
+                                buffer_slice[offset + 3],
+                            ]) as usize;
+                            offset += 4;
+                            
+                            if offset + length > buffer_slice.len() {
+                                break;
+                            }
+                            
+                            // Read string data
+                            let string_data = &buffer_slice[offset..offset + length];
+                            match std::str::from_utf8(string_data) {
+                                Ok(s) => dictionary_values.push(s.to_string()),
+                                Err(_) => {
+                                    // If not valid UTF-8, show as hex
+                                    let hex = string_data.iter()
+                                        .take(8)
+                                        .map(|b| format!("{:02X}", b))
+                                        .collect::<Vec<_>>()
+                                        .join("");
+                                    dictionary_values.push(format!("0x{}", hex));
+                                }
+                            }
+                            offset += length;
+                            
+                            if dictionary_values.len() >= max_items {
+                                break;
+                            }
+                        }
+                    }
+                    parquet::basic::Type::INT32 => {
+                        // INT32 PLAIN encoding: [value:4][value:4]...
+                        let buffer_slice = &page_buffer[..];
+                        let max_vals = (buffer_slice.len() / 4).min(num_values).min(max_items);
+                        
+                        for i in 0..max_vals {
+                            let offset = i * 4;
+                            if offset + 4 <= buffer_slice.len() {
+                                let value = i32::from_le_bytes([
+                                    buffer_slice[offset],
+                                    buffer_slice[offset + 1],
+                                    buffer_slice[offset + 2],
+                                    buffer_slice[offset + 3],
+                                ]);
+                                dictionary_values.push(value.to_string());
+                            }
+                        }
+                    }
+                    parquet::basic::Type::INT64 => {
+                        // INT64 PLAIN encoding: [value:8][value:8]...
+                        let buffer_slice = &page_buffer[..];
+                        let max_vals = (buffer_slice.len() / 8).min(num_values).min(max_items);
+                        
+                        for i in 0..max_vals {
+                            let offset = i * 8;
+                            if offset + 8 <= buffer_slice.len() {
+                                let value = i64::from_le_bytes([
+                                    buffer_slice[offset],
+                                    buffer_slice[offset + 1],
+                                    buffer_slice[offset + 2],
+                                    buffer_slice[offset + 3],
+                                    buffer_slice[offset + 4],
+                                    buffer_slice[offset + 5],
+                                    buffer_slice[offset + 6],
+                                    buffer_slice[offset + 7],
+                                ]);
+                                dictionary_values.push(value.to_string());
+                            }
+                        }
+                    }
+                    parquet::basic::Type::INT96 => {
+                        // INT96 PLAIN encoding: [value:12][value:12]...
+                        // INT96 is typically used for timestamps: 8 bytes nanoseconds + 4 bytes Julian day
+                        let buffer_slice = &page_buffer[..];
+                        let max_vals = (buffer_slice.len() / 12).min(num_values).min(max_items);
+                        
+                        for i in 0..max_vals {
+                            let offset = i * 12;
+                            if offset + 12 <= buffer_slice.len() {
+                                // Read as little-endian: first 8 bytes are nanoseconds, last 4 bytes are Julian day
+                                let nanos = u64::from_le_bytes([
+                                    buffer_slice[offset],
+                                    buffer_slice[offset + 1],
+                                    buffer_slice[offset + 2],
+                                    buffer_slice[offset + 3],
+                                    buffer_slice[offset + 4],
+                                    buffer_slice[offset + 5],
+                                    buffer_slice[offset + 6],
+                                    buffer_slice[offset + 7],
+                                ]);
+                                let julian_day = u32::from_le_bytes([
+                                    buffer_slice[offset + 8],
+                                    buffer_slice[offset + 9],
+                                    buffer_slice[offset + 10],
+                                    buffer_slice[offset + 11],
+                                ]);
+                                
+                                // Convert Julian day to Unix epoch (Jan 1, 1970 = Julian day 2440588)
+                                const JULIAN_DAY_OF_EPOCH: i64 = 2440588;
+                                let days_since_epoch = julian_day as i64 - JULIAN_DAY_OF_EPOCH;
+                                let seconds_since_epoch = days_since_epoch * 24 * 60 * 60;
+                                let total_nanos = seconds_since_epoch * 1_000_000_000 + nanos as i64;
+                                
+                                // Convert to readable timestamp
+                                let timestamp_secs = total_nanos / 1_000_000_000;
+                                let timestamp_nanos = total_nanos % 1_000_000_000;
+                                
+                                // Format as ISO 8601 timestamp
+                                if let Some(datetime) = chrono::DateTime::from_timestamp(timestamp_secs, timestamp_nanos as u32) {
+                                    dictionary_values.push(datetime.format("%Y-%m-%d %H:%M:%S%.9f UTC").to_string());
+                                } else {
+                                    // Fallback: show raw values
+                                    dictionary_values.push(format!("INT96(nanos={}, julian_day={})", nanos, julian_day));
+                                }
+                            }
+                        }
+                    }
+                    parquet::basic::Type::FLOAT => {
+                        // FLOAT PLAIN encoding: [value:4][value:4]...
+                        let buffer_slice = &page_buffer[..];
+                        let max_vals = (buffer_slice.len() / 4).min(num_values).min(max_items);
+                        
+                        for i in 0..max_vals {
+                            let offset = i * 4;
+                            if offset + 4 <= buffer_slice.len() {
+                                let bytes = [
+                                    buffer_slice[offset],
+                                    buffer_slice[offset + 1],
+                                    buffer_slice[offset + 2],
+                                    buffer_slice[offset + 3],
+                                ];
+                                let value = f32::from_le_bytes(bytes);
+                                dictionary_values.push(format!("{:.6}", value));
+                            }
+                        }
+                    }
+                    parquet::basic::Type::DOUBLE => {
+                        // DOUBLE PLAIN encoding: [value:8][value:8]...
+                        let buffer_slice = &page_buffer[..];
+                        let max_vals = (buffer_slice.len() / 8).min(num_values).min(max_items);
+                        
+                        for i in 0..max_vals {
+                            let offset = i * 8;
+                            if offset + 8 <= buffer_slice.len() {
+                                let bytes = [
+                                    buffer_slice[offset],
+                                    buffer_slice[offset + 1],
+                                    buffer_slice[offset + 2],
+                                    buffer_slice[offset + 3],
+                                    buffer_slice[offset + 4],
+                                    buffer_slice[offset + 5],
+                                    buffer_slice[offset + 6],
+                                    buffer_slice[offset + 7],
+                                ];
+                                let value = f64::from_le_bytes(bytes);
+                                dictionary_values.push(format!("{:.6}", value));
+                            }
+                        }
+                    }
+                    _ => {
+                        // For other types, show hex representation
+                        let hex_preview = page_buffer
+                            .iter()
+                            .take(32)
+                            .map(|b| format!("{:02X}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        dictionary_values.push(format!("Binary({}): {}", physical_type, hex_preview));
+                    }
+                }
+                
+                if dictionary_values.len() >= max_items {
+                    break;
+                }
+            }
+        }
+        
+        if dictionary_values.len() >= max_items {
+            break;
+        }
+    }
+
+    Ok(dictionary_values)
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
@@ -250,6 +475,16 @@ pub enum SchemaColumnType {
     Primitive {name: String, display: String },
     // name, then display string
     Group {name: String, display: String }
+}
+
+#[derive(Debug)]
+pub struct ColumnStats {
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub nulls: u64,
+    pub distinct: Option<u64>,
+    pub total_compressed_size: u64,
+    pub total_uncompressed_size: u64,
 }
 
 impl App {
@@ -779,7 +1014,7 @@ impl Widget for &App {
                 let mut table_stats_sep = sep_area;
                 if self.column_selected.is_some() {
                     let [t1, t2, t3] = Layout::horizontal([
-                        Constraint::Fill(1),
+                        Constraint::Fill(2),
                         Constraint::Length(1),
                         Constraint::Fill(1),
                     ])
@@ -864,22 +1099,25 @@ impl Widget for &App {
                                 let schema_descr = md.file_metadata().schema_descr();
                                 let physical = schema_descr.column(col_idx).physical_type();
 
-                                let (min_opt, max_opt, nulls, distinct_opt) = aggregate_column_stats(&md, col_idx, physical);
+                                let column_stats = aggregate_column_stats(&md, col_idx, physical);
 
                                 let mut kv_stats: Vec<(String, String)> = vec![
-                                    ("Null count".into(), commas(nulls)),
+                                    ("Null count".into(), commas(column_stats.nulls)),
                                 ];
-                                if let Some(ref min_val) = min_opt {
+                                if let Some(ref min_val) = column_stats.min {
                                     kv_stats.push(("Min".into(), min_val.clone()));
                                 }
-                                if let Some(ref max_val) = max_opt {
+                                if let Some(ref max_val) = column_stats.max {
                                     kv_stats.push(("Max".into(), max_val.clone()));
                                 }
-                                if let Some(dist) = distinct_opt {
-                                    kv_stats.push(("Distinct".into(), commas(dist)));
+                                if let Some(dist) = column_stats.distinct {
+                                    kv_stats.push(("Distinct".into(), commas(dist as u64)));
                                 }
-
-                                // Detect dictionary encoding and sample values
+                                kv_stats.push(("Total compressed size".into(), human_readable_bytes(column_stats.total_compressed_size)));
+                                kv_stats.push(("Total uncompressed size".into(), human_readable_bytes(column_stats.total_uncompressed_size)));
+                                kv_stats.push(("Compression ratio".into(), format!("{:.2}x", column_stats.total_uncompressed_size as f64 / column_stats.total_compressed_size as f64)));
+                                
+                                // Check for dictionary encoding and extract values
                                 let encodings_str = {
                                     // Retrieve encoding summary from ColumnSchemaInfo where possible
                                     let display_key = &lines[selected_idx];
@@ -890,17 +1128,14 @@ impl Widget for &App {
                                     } else { String::new() }
                                 };
 
-                                if encodings_str.contains("DICTIONARY") {
-                                    // Attempt to collect sample dictionary values up to 10
-                                    match sample_dictionary(&reader, col_idx, physical, 10) {
-                                        Ok(sample_vals) if !sample_vals.is_empty() => {
-                                            kv_stats.push(("Dictionary sample".into(), sample_vals.join(", ")));
-                                        },
-                                        _ => {
-                                            kv_stats.push(("Dictionary".into(), "(unable to decode)".into()));
-                                        }
+                                let dictionary_sample: Option<Vec<String>> = if encodings_str.contains("DICTIONARY") {
+                                    match extract_dictionary_values(&reader, col_idx, 10) {
+                                        Ok(sample_vals) if !sample_vals.is_empty() => Some(sample_vals),
+                                        _ => None
                                     }
-                                }
+                                } else {
+                                    None
+                                };
 
                                 // Determine layout for key/value table
                                 let max_key_len = kv_stats.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
@@ -914,11 +1149,31 @@ impl Widget for &App {
                                     })
                                     .collect();
 
-                                let table_widget = Table::new(rows, vec![Constraint::Length(max_key_len as u16), Constraint::Min(5)])
-                                    .column_spacing(1)
-                                    .block(Block::bordered().title(Line::from("Stats").centered()).border_set(border::ROUNDED));
+                                // Split stats area if we have dictionary samples to show
+                                if let Some(ref dict_vals) = dictionary_sample {
+                                    let [table_area, dict_area] = Layout::vertical([
+                                        Constraint::Fill(1),
+                                        Constraint::Length(3 + (dict_vals.len() as u16 / 3).max(1)), // Estimate height needed
+                                    ])
+                                    .areas(stats_area);
 
-                                table_widget.render(stats_area, buf);
+                                    let table_widget = Table::new(rows, vec![Constraint::Length(max_key_len as u16), Constraint::Min(5)])
+                                        .column_spacing(1)
+                                        .block(Block::bordered().title(Line::from("Stats").centered()).border_set(border::ROUNDED));
+                                    table_widget.render(table_area, buf);
+
+                                    // Render dictionary sample paragraph
+                                    let dict_text = format!("{}", dict_vals.join(", "));
+                                    let dict_paragraph = Paragraph::new(dict_text)
+                                        .wrap(ratatui::widgets::Wrap { trim: true })
+                                        .block(Block::bordered().title(Line::from(format!("Dictionary Sample ({})", dict_vals.len())).centered()).border_set(border::ROUNDED));
+                                    dict_paragraph.render(dict_area, buf);
+                                } else {
+                                    let table_widget = Table::new(rows, vec![Constraint::Length(max_key_len as u16), Constraint::Min(5)])
+                                        .column_spacing(1)
+                                        .block(Block::bordered().title(Line::from("Stats").centered()).border_set(border::ROUNDED));
+                                    table_widget.render(stats_area, buf);
+                                }
                             } else {
                                 // reader error
                                 Paragraph::new("Error reading file stats").render(stats_area, buf);
@@ -932,9 +1187,6 @@ impl Widget for &App {
                             .render(stats_area, buf);
                     }
                 }
-
-
-                // iterate through 
 
                 // Table of columns
                 let header = vec!["Rep", "Physical", "Logical", "Converted Type", "Codec", "Encoding"];
