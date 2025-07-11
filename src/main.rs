@@ -17,6 +17,8 @@ use ratatui::{
 };
 
 use parquet::schema::types::{Type as ParquetType};
+use parquet::basic::Type as PhysicalType;
+use parquet::file::metadata::ParquetMetaData;
 
 #[derive(Parser)]
 #[command(author, version, about="Tool to visualize parquet files")]
@@ -99,6 +101,80 @@ fn human_readable_count(n: u64) -> String {
     }
 }
 
+/// Decode raw statistics bytes into a readable value based on the physical type.
+fn decode_value(bytes: &[u8], physical: PhysicalType) -> String {
+    match physical {
+        PhysicalType::INT32 if bytes.len() == 4 => {
+            let v = i32::from_le_bytes(bytes.try_into().unwrap());
+            v.to_string()
+        }
+        PhysicalType::INT64 if bytes.len() == 8 => {
+            let v = i64::from_le_bytes(bytes.try_into().unwrap());
+            v.to_string()
+        }
+        PhysicalType::FLOAT if bytes.len() == 4 => {
+            let v = f32::from_le_bytes(bytes.try_into().unwrap());
+            format!("{:.4}", v)
+        }
+        PhysicalType::DOUBLE if bytes.len() == 8 => {
+            let v = f64::from_le_bytes(bytes.try_into().unwrap());
+            format!("{:.4}", v)
+        }
+        PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+            match std::str::from_utf8(bytes) {
+                Ok(s) => s.to_string(),
+                Err(_) => bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(""),
+            }
+        }
+        _ => bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(""),
+    }
+}
+
+/// Aggregate statistics (total values, min, max, nulls, distinct) for the given column across all row groups.
+fn aggregate_column_stats(md: &ParquetMetaData, col_idx: usize, physical: PhysicalType) -> (Option<String>, Option<String>, u64, Option<u64>) {
+    let mut min_bytes: Option<Vec<u8>> = None;
+    let mut max_bytes: Option<Vec<u8>> = None;
+    let mut nulls: u64 = 0;
+    let mut distinct: Option<u64> = None;
+
+    for rg in md.row_groups() {
+        let col_meta = rg.column(col_idx);
+        if let Some(stats) = col_meta.statistics() {
+            if let Some(n) = stats.null_count_opt() {
+                nulls += n as u64;
+            }
+            if let Some(d) = stats.distinct_count_opt() {
+                distinct = Some(distinct.unwrap_or(0) + d as u64);
+            }
+            if let Some(min_b) = stats.min_bytes_opt() {
+                if min_bytes.is_none() || min_b < &min_bytes.as_ref().unwrap()[..] {
+                    min_bytes = Some(min_b.to_vec());
+                }
+            }
+            if let Some(max_b) = stats.max_bytes_opt() {
+                if max_bytes.is_none() || max_b > &max_bytes.as_ref().unwrap()[..] {
+                    max_bytes = Some(max_b.to_vec());
+                }
+            }
+        }
+    }
+
+    let min_str = min_bytes.as_deref().map(|b| decode_value(b, physical));
+    let max_str = max_bytes.as_deref().map(|b| decode_value(b, physical));
+
+    (min_str, max_str, nulls, distinct)
+}
+
+use parquet::column::reader::ColumnReader;
+// Removed unused data_type imports to avoid compilation issues
+
+/// Sample up to `max_items` unique values from the column to present a dictionary preview.
+fn sample_dictionary(_reader: &SerializedFileReader<File>, _col_idx: usize, _physical: PhysicalType, _max_items: usize) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    // TODO: Implement robust dictionary sampling compatible with current parquet crate API.
+    // For now, return empty vector so the stats panel still renders.
+    Ok(Vec::new())
+}
+
 fn truncate_str(s: &str, max: usize) -> String {
     if s.chars().count() > max {
         let truncated: String = s.chars().take(max - 1).collect();
@@ -124,11 +200,13 @@ fn commas(n: u64) -> String {
 pub struct ParquetFileMetadata {
     file_name: String,
     format_version: String,
+    created_by: String,
     rows: u64,
     columns: u64,
     row_groups: u64,
     size_raw: u64,
     size_compressed: u64,
+    compression_ratio: f64,
     codecs: Vec<String>,
     encodings: String,
     avg_row_size: u64,
@@ -141,6 +219,7 @@ pub struct ColumnSchemaInfo {
     pub physical: String,
     pub logical: String,
     pub codec: String,
+    pub converted_type: String,
     pub encoding: String,
 }
 
@@ -157,6 +236,10 @@ pub struct App {
     tabs: Vec<&'static str>,
     active_tab: usize,
     column_selected: Option<usize>,
+    // to be populated by the schema_tree_lines function for schema name and tree
+    schema_columns: Vec<SchemaColumnType>,
+    // to be populated by the schema_tree_lines function for column information
+    schema_map: HashMap<String, ColumnType>,
 }
 
 #[derive(Debug)]
@@ -176,6 +259,10 @@ impl App {
         self.tabs = vec!["Schema", "Row Groups"];
         self.active_tab = 0; // Schema selected by default
         self.column_selected = None;
+        // TODO: handle errors
+        let (schema_columns, schema_map) = self.schema_tree_lines().unwrap();
+        self.schema_columns = schema_columns;
+        self.schema_map = schema_map;
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
@@ -217,15 +304,13 @@ impl App {
             KeyCode::Down => {
                 if self.active_tab == 0 {
                     // schema tab: move selection down within leaf count
-                    if let Ok((lines, _)) = self.schema_tree_lines() {
-                        let total_columns: usize = lines.len();
-                        if let Some(idx) = self.column_selected {
-                            if idx + 1 < total_columns {
-                                self.column_selected = Some(idx + 1);
-                            }
-                        } else {
-                            self.column_selected = Some(1);
+                    let total_columns: usize = self.schema_columns.len();
+                    if let Some(idx) = self.column_selected {
+                        if idx + 1 < total_columns {
+                            self.column_selected = Some(idx + 1);
                         }
+                    } else {
+                        self.column_selected = Some(1);
                     }
                 }
             }
@@ -306,8 +391,6 @@ impl App {
         let max_rows = rows_per_rg.iter().max().copied().unwrap_or(0);
     
         // Size & compression ratio
-        let raw_size_hr        = human_readable_bytes(raw_size);
-        let compressed_size_hr = human_readable_bytes(compressed_size);
         let compression_ratio  = if compressed_size > 0 { raw_size as f64 / compressed_size as f64 } else { 0.0 };
     
         // Codec summary with counts
@@ -327,12 +410,14 @@ impl App {
 
         Ok(ParquetFileMetadata {
             file_name: self.file_name.clone(),
-            format_version: format!("{}  ({})", version, created_by),
+            format_version: version.to_string(),
+            created_by: created_by.to_string(),
             rows: total_rows as u64,
             columns: num_cols as u64,
             row_groups: row_groups as u64,
             size_raw: raw_size,
             size_compressed: compressed_size,
+            compression_ratio: compression_ratio,
             codecs: codec_vec,
             encodings: encodings_summary,
             avg_row_size: avg_row_size as u64,
@@ -354,10 +439,12 @@ impl App {
         // Pre-compute codec + encoding summary for every leaf column
         // ------------------------------------------------------------------
         let mut leaf_summaries: Vec<(String, String)> = Vec::new(); // (codec_summary, enc_summary)
-        for (col_idx, _col_descr) in schema_descr.columns().iter().enumerate() {
+        for (col_idx, _) in schema_descr.columns().iter().enumerate() {
             use std::collections::HashSet;
             let mut codecs: HashSet<String> = HashSet::new();
             let mut encs: HashSet<String> = HashSet::new();
+
+            // expensive operation, since it iterates over all row groups
             for rg in md.row_groups() {
                 let col_chunk = rg.column(col_idx);
                 codecs.insert(format!("{:?}", col_chunk.compression()));
@@ -388,17 +475,17 @@ impl App {
                 let physical = format!("{:?}", node.get_physical_type());
                 let logical = match node.get_basic_info().logical_type() {
                     Some(logical) => match logical {
-                        LogicalType::Decimal { scale, precision } => format!("Decimal (scale={}, precision={})", scale, precision),
-                        LogicalType::Integer { bit_width, is_signed } => format!("Integer (bit_width={}, is_signed={})", bit_width, is_signed),
+                        LogicalType::Decimal { scale, precision } => format!("Decimal({},{})", scale, precision),
+                        LogicalType::Integer { bit_width, is_signed } => format!("Integer({},{})", bit_width, if is_signed { "sign" } else { "unsign" }),
                         LogicalType::Time { is_adjusted_to_u_t_c, unit } => match unit {
-                            TimeUnit::MILLIS(_) => format!("Time (utc={}, unit=millis)", is_adjusted_to_u_t_c),
-                            TimeUnit::MICROS(_) => format!("Time (utc={}, unit=micros)", is_adjusted_to_u_t_c),
-                            TimeUnit::NANOS(_) => format!("Time (utc={}, unit=nanos)", is_adjusted_to_u_t_c),
+                            TimeUnit::MILLIS(_) => format!("Time({}, millis)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                            TimeUnit::MICROS(_) => format!("Time({}, micros)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                            TimeUnit::NANOS(_) => format!("Time({}, nanos)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
                         },
                         LogicalType::Timestamp { is_adjusted_to_u_t_c, unit } => match unit {
-                            TimeUnit::MILLIS(_) => format!("Timestamp (utc={}, unit=millis)", is_adjusted_to_u_t_c),
-                            TimeUnit::MICROS(_) => format!("Timestamp (utc={}, unit=micros)", is_adjusted_to_u_t_c),
-                            TimeUnit::NANOS(_) => format!("Timestamp (utc={}, unit=nanos)", is_adjusted_to_u_t_c),
+                            TimeUnit::MILLIS(_) => format!("Timestamp({}, millis)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                            TimeUnit::MICROS(_) => format!("Timestamp({}, micros)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
+                            TimeUnit::NANOS(_) => format!("Timestamp({}, nanos)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
                         },
                         _ => format!("{:?}", logical),
                     },
@@ -414,6 +501,7 @@ impl App {
                     logical: logical.clone(),
                     codec: codec_sum.clone(),
                     encoding: enc_sum.clone(),
+                    converted_type: node.get_basic_info().converted_type().to_string(),
                 };
                 map.insert(line.clone(), ColumnType::Primitive(column_info));
                 lines.push(SchemaColumnType::Primitive {name: node.name().to_string(), display: line});
@@ -504,11 +592,13 @@ impl Widget for &App {
                 let codec_summary = md.codecs.join("  ");
                 let kv = vec![
                     ("Format version".into(), md.format_version),
+                    ("Created by".into(), md.created_by),
                     ("Rows".into(), commas(md.rows)),
                     ("Columns".into(), md.columns.to_string()),
                     ("Row groups".into(), md.row_groups.to_string()),
                     ("Size (raw)".into(), human_readable_bytes(md.size_raw)),
                     ("Size (compressed)".into(), human_readable_bytes(md.size_compressed)),
+                    ("Compression ratio".into(), format!("{:.2}x", md.compression_ratio)),
                     ("Codecs (cols)".into(), codec_summary),
                     ("Encodings".into(), md.encodings),
                     ("Avg row size".into(), format!("{} B", md.avg_row_size)),
@@ -533,6 +623,8 @@ impl Widget for &App {
             .title(Line::from("File Metadata".yellow().bold()).centered())
             .border_set(border::ROUNDED);
 
+        let kv_len = kv_pairs.len();
+
         let max_key_len = kv_pairs
             .iter()
             .map(|(k, _)| k.len())
@@ -549,7 +641,6 @@ impl Widget for &App {
         let table_width_est = max_key_len + 1 /*spacing*/ + max_val_len + 2 /*borders*/;
 
         // Prepare rows for the widget
-        
         let rows: Vec<Row> = kv_pairs
             .into_iter()
             .map(|(k, v)| {
@@ -563,7 +654,7 @@ impl Widget for &App {
         // Split left pane vertically: file name block on top, metadata table below
         let [file_name_area, table_container_area, _spacer] = Layout::vertical([
             Constraint::Length(3),
-            Constraint::Max(11),
+            Constraint::Max(kv_len as u16 + 2),
             Constraint::Fill(1),
         ])
         .areas(nav_area);
@@ -644,6 +735,7 @@ impl Widget for &App {
                                     Cell::from(info.repetition.clone()),
                                     Cell::from(info.physical.clone()),
                                     Cell::from(info.logical.clone()),
+                                    Cell::from(info.converted_type.clone()),
                                     Cell::from(info.codec.clone()),
                                     Cell::from(info.encoding.clone()),
                                 ]);
@@ -656,14 +748,15 @@ impl Widget for &App {
                             }
                             ColumnType::Group(repetition) => {
                                 let mut row = Row::new(vec![
-                                    Cell::from(repetition.clone()),
-                                    Cell::from("group"),
+                                    Cell::from(repetition.clone().green()),
+                                    Cell::from("group".green()),
                                 ]);
+                                
                                 if let Some(selected_index) = self.column_selected {
                                     if idx == selected_index {
                                         row = row.style(Style::default().bg(ratatui::prelude::Color::DarkGray));
                                     }
-                                }
+                                } 
                                 table_rows.push(row);
                             }
 
@@ -678,13 +771,33 @@ impl Widget for &App {
                     Constraint::Fill(1),
                 ])
                 .areas(content_area);
+                
+                let mut table_area = table_area;
+                let mut stats_area = table_area;
+                let mut table_stats_sep = sep_area;
+                if self.column_selected.is_some() {
+                    let [t1, t2, t3] = Layout::horizontal([
+                        Constraint::Fill(1),
+                        Constraint::Length(1),
+                        Constraint::Fill(1),
+                    ])
+                    .areas(table_area);
+                    table_area = t1;
+                    table_stats_sep = t2;
+                    stats_area = t3;
+                }
 
                 // Render tree text
-                let tree_info = Line::from(vec![
+                let mut tree_vec = vec![
                     "Leaf".blue(),
                     ", ".into(),
                     "Group".green(),
-                ]);
+                ];
+                
+                if let Some(_) = self.column_selected {
+                    tree_vec.extend(vec![", ".into(), "Selected".bold().yellow()]);
+                }
+                let tree_info = Line::from(tree_vec);
 
                 let list = List::new(
                     lines.iter().enumerate().map(|(idx, line)| {
@@ -719,17 +832,120 @@ impl Widget for &App {
                 let sep_block = Block::default().borders(Borders::RIGHT).fg(Color::Yellow);
                 sep_block.render(sep_area, buf);
 
+                // vertical separator between table and stats
+                if let Some(selected_idx) = self.column_selected {
+                    let table_stats_sep_block = Block::default().borders(Borders::RIGHT).fg(Color::Yellow);
+                    table_stats_sep_block.render(table_stats_sep, buf);
+
+                    // Determine column index among leaf columns
+                    let mut leaf_counter: usize = 0;
+                    let mut selected_col_idx: Option<usize> = None;
+                    for (i, l) in lines.iter().enumerate() {
+                        if let SchemaColumnType::Primitive { .. } = l {
+                            if i == selected_idx {
+                                selected_col_idx = Some(leaf_counter);
+                                break;
+                            }
+                            leaf_counter += 1;
+                        } else if i == selected_idx {
+                            // selected is a Group/root – no per-column stats
+                            selected_col_idx = None;
+                            break;
+                        }
+                    }
+
+                    if let Some(col_idx) = selected_col_idx {
+                        // Open file and gather metadata
+                        if let Ok(file) = File::open(&Path::new(self.file_name.as_str())) {
+                            if let Ok(reader) = SerializedFileReader::new(file) {
+                                let md = reader.metadata();
+                                let schema_descr = md.file_metadata().schema_descr();
+                                let physical = schema_descr.column(col_idx).physical_type();
+
+                                let (min_opt, max_opt, nulls, distinct_opt) = aggregate_column_stats(&md, col_idx, physical);
+
+                                let mut kv_stats: Vec<(String, String)> = vec![
+                                    ("Null count".into(), commas(nulls)),
+                                ];
+                                if let Some(ref min_val) = min_opt {
+                                    kv_stats.push(("Min".into(), min_val.clone()));
+                                }
+                                if let Some(ref max_val) = max_opt {
+                                    kv_stats.push(("Max".into(), max_val.clone()));
+                                }
+                                if let Some(dist) = distinct_opt {
+                                    kv_stats.push(("Distinct".into(), commas(dist)));
+                                }
+
+                                // Detect dictionary encoding and sample values
+                                let encodings_str = {
+                                    // Retrieve encoding summary from ColumnSchemaInfo where possible
+                                    let display_key = &lines[selected_idx];
+                                    if let SchemaColumnType::Primitive { display: ref d, .. } = display_key {
+                                        if let Some(ColumnType::Primitive(info)) = col_map.get(d) {
+                                            info.encoding.clone()
+                                        } else { String::new() }
+                                    } else { String::new() }
+                                };
+
+                                if encodings_str.contains("DICTIONARY") {
+                                    // Attempt to collect sample dictionary values up to 10
+                                    match sample_dictionary(&reader, col_idx, physical, 10) {
+                                        Ok(sample_vals) if !sample_vals.is_empty() => {
+                                            kv_stats.push(("Dictionary sample".into(), sample_vals.join(", ")));
+                                        },
+                                        _ => {
+                                            kv_stats.push(("Dictionary".into(), "(unable to decode)".into()));
+                                        }
+                                    }
+                                }
+
+                                // Determine layout for key/value table
+                                let max_key_len = kv_stats.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+
+                                let rows: Vec<Row> = kv_stats.into_iter()
+                                    .map(|(k, v)| {
+                                        Row::new(vec![
+                                            Cell::from(k).bold().fg(Color::Blue),
+                                            Cell::from(v),
+                                        ])
+                                    })
+                                    .collect();
+
+                                let table_widget = Table::new(rows, vec![Constraint::Length(max_key_len as u16), Constraint::Min(5)])
+                                    .column_spacing(1)
+                                    .block(Block::bordered().title(Line::from("Stats").centered()).border_set(border::ROUNDED));
+
+                                table_widget.render(stats_area, buf);
+                            } else {
+                                // reader error
+                                Paragraph::new("Error reading file stats").render(stats_area, buf);
+                            }
+                        } else {
+                            Paragraph::new("Error opening file").render(stats_area, buf);
+                        }
+                    } else {
+                        Paragraph::new("(No stats available for group)")
+                            .block(Block::bordered().title(Line::from("Stats").centered()).border_set(border::ROUNDED))
+                            .render(stats_area, buf);
+                    }
+                }
+
+
+                // iterate through 
+
                 // Table of columns
-                let header = vec!["Rep", "Physical", "Logical", "Codec", "Encoding"];
+                let header = vec!["Rep", "Physical", "Logical", "Converted Type", "Codec", "Encoding"];
                 let col_constraints = vec![
                     Constraint::Length(10),
                     Constraint::Length(10),
                     Constraint::Length(18),
+                    Constraint::Length(10),
                     Constraint::Length(8),
                     Constraint::Min(10),
                 ];
                 let table_widget = Table::new(table_rows, col_constraints)
-                    .header(Row::new(header.into_iter().map(|h| Cell::from(h).bold().fg(Color::Green))))
+                    .header(Row::new(header.into_iter().map(|h| Cell::from(h).bold().fg(Color::DarkRed))))
                     .column_spacing(1)
                     .block(Block::bordered().title(Line::from("Columns").centered()).border_set(border::ROUNDED));
 
