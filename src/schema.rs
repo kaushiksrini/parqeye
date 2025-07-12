@@ -5,7 +5,7 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::basic::{LogicalType, TimeUnit};
 use parquet::schema::types::{Type as ParquetType};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ColumnSchemaInfo {
     pub name: String,
     pub repetition: String,
@@ -16,13 +16,13 @@ pub struct ColumnSchemaInfo {
     pub encoding: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ColumnType {
     Primitive(ColumnSchemaInfo),
     Group(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SchemaColumnType {
     Root {name: String, display: String },
     Primitive {name: String, display: String },

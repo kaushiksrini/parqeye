@@ -18,6 +18,7 @@ use crate::schema::{SchemaColumnType, ColumnType};
 use crate::stats::aggregate_column_stats;
 use crate::dictionary::extract_dictionary_values;
 use crate::utils::{human_readable_bytes, commas};
+use crate::components::{SchemaTreeComponent, ScrollbarComponent};
 
 pub fn render_app(app: &App, frame: &mut Frame) {
     frame.render_widget(AppWidget(app), frame.area());
@@ -222,9 +223,8 @@ fn render_schema_tab(app: &App, area: Rect, buf: &mut Buffer) {
 
     // Layout: tree | separator | table | separator | stats (if selected)
     let areas = if app.column_selected.is_some() {
-        let [tree_area, sep_area, table_stats_area] = Layout::horizontal([
+        let [tree_area, table_stats_area] = Layout::horizontal([
             Constraint::Length(tree_width as u16),
-            Constraint::Length(1),
             Constraint::Fill(1),
         ])
         .areas(area);
@@ -236,30 +236,31 @@ fn render_schema_tab(app: &App, area: Rect, buf: &mut Buffer) {
         ])
         .areas(table_stats_area);
         
-        (tree_area, sep_area, table_area, Some(table_stats_sep), Some(stats_area))
+        (tree_area, table_area, Some(table_stats_sep), Some(stats_area))
     } else {
-        let [tree_area, sep_area, table_area] = Layout::horizontal([
+        let [tree_area, table_area] = Layout::horizontal([
             Constraint::Length(tree_width as u16),
-            Constraint::Length(1),
             Constraint::Fill(1),
         ])
         .areas(area);
         
-        (tree_area, sep_area, table_area, None, None)
+        (tree_area, table_area, None, None)
     };
 
     // Render tree
+    // let schema_tree = SchemaTreeComponent::new(app.schema_columns.clone())
+    //     .with_selected_index(app.column_selected);
+    // schema_tree.render(areas.0, buf);
+
     render_schema_tree(app, areas.0, buf);
     
     // Render separator
-    let sep_block = Block::default().borders(Borders::RIGHT).fg(Color::Yellow);
-    sep_block.render(areas.1, buf);
     
     // Render columns table
-    render_columns_table(table_rows, areas.2, buf);
+    render_columns_table(table_rows, areas.1, buf, app);
     
     // Render stats if column is selected
-    if let (Some(sep_area), Some(stats_area)) = (areas.3, areas.4) {
+    if let (Some(sep_area), Some(stats_area)) = (areas.2, areas.3) {
         let table_stats_sep_block = Block::default().borders(Borders::RIGHT).fg(Color::Yellow);
         table_stats_sep_block.render(sep_area, buf);
         
@@ -268,6 +269,36 @@ fn render_schema_tab(app: &App, area: Rect, buf: &mut Buffer) {
 }
 
 fn render_schema_tree(app: &App, area: Rect, buf: &mut Buffer) {
+    // Calculate viewport height (subtract 2 for borders)
+    let viewport_height = area.height.saturating_sub(2) as usize;
+
+    let [tree_area, line_area] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    
+    // Check if we need a scrollbar
+    let needs_scrollbar = app.needs_scrollbar(viewport_height);
+    // let (tree_area, scrollbar_area) = if needs_scrollbar && area.width > 2 {
+    //     // Reserve 1 column for scrollbar
+    //     let tree_rect = Rect {
+    //         x: area.x,
+    //         y: area.y,
+    //         width: area.width.saturating_sub(1),
+    //         height: area.height,
+    //     };
+    //     let scrollbar_rect = Rect {
+    //         x: area.x + area.width.saturating_sub(1),
+    //         y: area.y + 1, // Start after top border
+    //         width: 1,
+    //         height: area.height.saturating_sub(2), // Exclude borders
+    //     };
+    //     (tree_rect, Some(scrollbar_rect))
+    // } else {
+    //     (area, None)
+    // };
+
     let mut tree_vec = vec![
         "Leaf".blue(),
         ", ".into(),
@@ -279,40 +310,93 @@ fn render_schema_tree(app: &App, area: Rect, buf: &mut Buffer) {
     }
     let tree_info = Line::from(tree_vec);
 
-    let list = List::new(
-        app.schema_columns.iter().enumerate().map(|(idx, line)| {
-            match line {
-                SchemaColumnType::Root {display: ref d, ..} => {
-                    ListItem::new(d.clone()).dark_gray()
-                },
-                SchemaColumnType::Primitive {display: ref d, ..} => {
-                    let mut item = ListItem::new(d.clone()).blue();
-                    if let Some(selected_index) = app.column_selected {
-                        if idx == selected_index {
-                            item = item.fg(Color::Yellow).bold();
-                        }
-                    }
-                    item
-                },
-                SchemaColumnType::Group {display: ref d, ..} => {
-                    let mut item: ListItem<'_> = ListItem::new(d.clone()).green();
-                    if let Some(selected_index) = app.column_selected {
-                        if idx == selected_index {
-                            item = item.fg(Color::Yellow).bold();
-                        }
-                    }
-                    item
-                }
-            }
-        }).collect::<Vec<ListItem>>()
-    ).block(Block::bordered().title(Line::from("Schema Tree").centered()).title_bottom(tree_info.centered()).border_set(border::ROUNDED));
+    // Get visible items based on scroll
+    let (visible_items, _) = app.get_visible_schema_items(viewport_height);
     
-    list.render(area, buf);
+    let list_items: Vec<ListItem> = visible_items.iter().enumerate().map(|(visible_idx, line)| {
+        // Calculate actual index in the schema_columns array
+        let actual_idx = if visible_idx == 0 {
+            // First visible item is always the root (index 0)
+            0
+        } else {
+            // Other items start from index 1 + scroll_offset
+            visible_idx + app.scroll_offset
+        };
+        
+        match line {
+            SchemaColumnType::Root {display: ref d, ..} => {
+                let mut item = ListItem::new(d.clone()).dark_gray();
+                if let Some(selected_index) = app.column_selected {
+                    if actual_idx == selected_index {
+                        item = item.fg(Color::Yellow).bold();
+                    }
+                }
+                item
+            },
+            SchemaColumnType::Primitive {display: ref d, ..} => {
+                let mut item = ListItem::new(d.clone()).blue();
+                if let Some(selected_index) = app.column_selected {
+                    if actual_idx == selected_index {
+                        item = item.fg(Color::Yellow).bold();
+                    }
+                }
+                item
+            },
+            SchemaColumnType::Group {display: ref d, ..} => {
+                let mut item: ListItem<'_> = ListItem::new(d.clone()).green();
+                if let Some(selected_index) = app.column_selected {
+                    if actual_idx == selected_index {
+                        item = item.fg(Color::Yellow).bold();
+                    }
+                }
+                item
+            }
+        }
+    }).collect();
+
+    let list = List::new(list_items)
+        .block(Block::bordered()
+            .title(Line::from("Schema Tree").centered())
+            .title_bottom(tree_info.centered())
+            .border_set(border::ROUNDED));
+    
+    list.render(tree_area, buf);
+
+    // Render scrollbar if needed
+    if needs_scrollbar {
+        // Calculate scrollbar parameters for the new scrolling logic
+        let total_items = app.schema_columns.len();
+        let scrollable_items = total_items.saturating_sub(1); // Exclude always-visible root
+        let effective_viewport = viewport_height.saturating_sub(1); // Account for root
+        
+        // Clamp scroll offset to valid range for scrollbar calculation
+        let max_scroll_offset = scrollable_items.saturating_sub(effective_viewport);
+        let clamped_scroll_offset = app.scroll_offset.min(max_scroll_offset);
+        
+        let scrollbar = ScrollbarComponent::vertical(
+            scrollable_items,
+            effective_viewport,
+            clamped_scroll_offset,
+        ).with_colors(Color::DarkGray, Color::White);
+        
+        scrollbar.render(line_area, buf);
+    } else {
+        Block::default().borders(Borders::RIGHT).fg(Color::Yellow).render(line_area, buf);
+    }
 }
 
-fn render_columns_table(table_rows: Vec<Row>, area: Rect, buf: &mut Buffer) {
+fn render_columns_table(table_rows: Vec<Row>, area: Rect, buf: &mut Buffer, app: &App) {
+    // Calculate viewport height for table (subtract 3 for borders and header)
+    let viewport_height = area.height.saturating_sub(3) as usize;
+    
     let header = vec!["Rep", "Physical", "Logical", "Converted Type", "Codec", "Encoding"];
-    // calculate the max length of each of the rows
+
+    // Get visible rows based on scroll offset
+    let visible_rows: Vec<Row> = table_rows
+        .into_iter()
+        .skip(app.scroll_offset)
+        .take(viewport_height)
+        .collect();
 
     let col_constraints = vec![
         Constraint::Length(10),
@@ -322,7 +406,8 @@ fn render_columns_table(table_rows: Vec<Row>, area: Rect, buf: &mut Buffer) {
         Constraint::Length(8),
         Constraint::Min(10),
     ];
-    let table_widget = Table::new(table_rows, col_constraints)
+    
+    let table_widget = Table::new(visible_rows, col_constraints)
         .header(Row::new(header.into_iter().map(|h| Cell::from(h).bold().fg(Color::Red))))
         .column_spacing(1)
         .block(Block::bordered().title(Line::from("Columns").centered()).border_set(border::ROUNDED));

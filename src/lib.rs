@@ -5,5 +5,6 @@ pub mod stats;
 pub mod dictionary;
 pub mod ui;
 pub mod utils;
+pub mod components;
 
 pub use app::App;
