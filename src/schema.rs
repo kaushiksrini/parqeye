@@ -30,7 +30,7 @@ pub enum SchemaColumnType {
 }
 
 pub fn build_schema_tree_lines(file_name: &str) -> Result<(Vec<SchemaColumnType>, HashMap<String, ColumnType>), Box<dyn std::error::Error>> {
-    let file = File::open(&Path::new(file_name))?;
+    let file = File::open(Path::new(file_name))?;
     let reader: SerializedFileReader<File> = SerializedFileReader::new(file)?;
     let md = reader.metadata();
     let schema_descr = md.file_metadata().schema_descr();

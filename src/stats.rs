@@ -23,10 +23,10 @@ pub fn aggregate_column_stats(md: &ParquetMetaData, col_idx: usize, physical: Ph
         let col_meta = rg.column(col_idx);
         if let Some(stats) = col_meta.statistics() {
             if let Some(n) = stats.null_count_opt() {
-                nulls += n as u64;
+                nulls += n;
             }
             if let Some(d) = stats.distinct_count_opt() {
-                distinct = Some(distinct.unwrap_or(0) + d as u64);
+                distinct = Some(distinct.unwrap_or(0) + d);
             }
             if let Some(min_b) = stats.min_bytes_opt() {
                 if min_bytes.is_none() || min_b < &min_bytes.as_ref().unwrap()[..] {

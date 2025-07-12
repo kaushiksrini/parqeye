@@ -20,13 +20,13 @@ pub struct ParquetFileMetadata {
 }
 
 pub fn extract_parquet_file_metadata(file_name: &str) -> Result<ParquetFileMetadata, Box<dyn std::error::Error>> {
-    let file = File::open(&Path::new(file_name))?;
+    let file = File::open(Path::new(file_name))?;
     let reader: SerializedFileReader<File> = SerializedFileReader::new(file)?;
     let md = reader.metadata();
 
     let binding = md.file_metadata().created_by();
     let version = md.file_metadata().version();
-    let created_by = binding.as_deref().unwrap_or("—");
+    let created_by = binding.unwrap_or("—");
     let row_groups = md.num_row_groups();
     let total_rows: i64 = md.row_groups().iter().map(|rg| rg.num_rows()).sum();
     let num_cols = md.file_metadata().schema_descr().num_columns();
@@ -35,7 +35,7 @@ pub fn extract_parquet_file_metadata(file_name: &str) -> Result<ParquetFileMetad
     let mut compressed_size: u64 = 0;
     let mut encodings_seen: HashSet<String> = HashSet::new();
     let mut codec_counts: HashMap<String, usize> = HashMap::new();
-    let mut rows_per_rg: Vec<i64> = Vec::with_capacity(row_groups as usize);
+    let mut rows_per_rg: Vec<i64> = Vec::with_capacity(row_groups);
 
     for rg in md.row_groups() {
         rows_per_rg.push(rg.num_rows());

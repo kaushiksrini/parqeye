@@ -312,6 +312,8 @@ fn render_schema_tree(app: &App, area: Rect, buf: &mut Buffer) {
 
 fn render_columns_table(table_rows: Vec<Row>, area: Rect, buf: &mut Buffer) {
     let header = vec!["Rep", "Physical", "Logical", "Converted Type", "Codec", "Encoding"];
+    // calculate the max length of each of the rows
+
     let col_constraints = vec![
         Constraint::Length(10),
         Constraint::Length(10),
@@ -348,13 +350,13 @@ fn render_column_stats(app: &App, area: Rect, buf: &mut Buffer) {
 
         if let Some(col_idx) = selected_col_idx {
             // Open file and gather metadata
-            if let Ok(file) = File::open(&Path::new(app.file_name.as_str())) {
+            if let Ok(file) = File::open(Path::new(&app.file_name.as_str())) {
                 if let Ok(reader) = SerializedFileReader::new(file) {
                     let md = reader.metadata();
                     let schema_descr = md.file_metadata().schema_descr();
                     let physical = schema_descr.column(col_idx).physical_type();
 
-                    let column_stats = aggregate_column_stats(&md, col_idx, physical);
+                    let column_stats = aggregate_column_stats(md, col_idx, physical);
 
                     let mut kv_stats: Vec<(String, String)> = vec![
                         ("Null count".into(), commas(column_stats.nulls)),
@@ -366,7 +368,7 @@ fn render_column_stats(app: &App, area: Rect, buf: &mut Buffer) {
                         kv_stats.push(("Max".into(), max_val.clone()));
                     }
                     if let Some(dist) = column_stats.distinct {
-                        kv_stats.push(("Distinct".into(), commas(dist as u64)));
+                        kv_stats.push(("Distinct".into(), commas(dist)));
                     }
                     kv_stats.push(("Total compressed size".into(), human_readable_bytes(column_stats.total_compressed_size)));
                     kv_stats.push(("Total uncompressed size".into(), human_readable_bytes(column_stats.total_uncompressed_size)));
@@ -417,7 +419,7 @@ fn render_column_stats(app: &App, area: Rect, buf: &mut Buffer) {
                         table_widget.render(table_area, buf);
 
                         // Render dictionary sample paragraph
-                        let dict_text = format!("{}", dict_vals.join(", "));
+                        let dict_text = dict_vals.join(", ");
                         let dict_paragraph = Paragraph::new(dict_text)
                             .wrap(ratatui::widgets::Wrap { trim: true })
                             .block(Block::bordered().title(Line::from(format!("Dictionary Sample ({})", dict_vals.len())).centered()).border_set(border::ROUNDED));
