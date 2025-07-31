@@ -112,7 +112,7 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     // now we render the stats for that row group
     // split the area into 3 parts with majority in the center and others in the side
 
-    let [left_arrow_area, row_group_stats_area, right_arrow_area] = Layout::horizontal([
+    let [_left_arrow_area, row_group_stats_area, _right_arrow_area] = Layout::horizontal([
         Constraint::Percentage(20),
         Constraint::Percentage(60),
         Constraint::Percentage(20),
