@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::{fs::File, io};
 use std::path::Path;
 use ratatui::{
     buffer::Buffer,
@@ -7,31 +7,32 @@ use ratatui::{
     style::{Stylize, Style},
     symbols::border,
     text::Line,
-    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Tabs, Widget},
+    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Widget},
     Frame,
 };
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::{metadata::ParquetMetaData, reader::{FileReader, SerializedFileReader}};
 
-use crate::app::App;
-use crate::metadata::extract_parquet_file_metadata;
+use crate::{app::App, metadata::extract_file_metadata};
 use crate::schema::{SchemaColumnType, ColumnType};
 use crate::stats::aggregate_column_stats;
 use crate::dictionary::extract_dictionary_values;
 use crate::utils::{human_readable_bytes, commas};
-use crate::components::{SchemaTreeComponent, ScrollbarComponent};
+use crate::components::{ScrollbarComponent, MetadataComponent, TabsComponent};
 
-pub fn render_app(app: &App, frame: &mut Frame) {
+use crate::column_chunk::ColumnMetadata;
+
+pub fn render_app(app: &mut App, frame: &mut Frame) {
     frame.render_widget(AppWidget(app), frame.area());
 }
 
-struct AppWidget<'a>(&'a App);
+struct AppWidget<'a>(&'a mut App);
 
 impl<'a> Widget for AppWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let app = self.0;
         
         // Build the surrounding block with title and instructions
-        let title: Line<'_> = Line::from(" datatools ".bold().fg(Color::Green));
+        let title: Line<'_> = Line::from(" parqeye ".bold().fg(Color::Green));
         let block: Block<'_> = Block::bordered()
             .title(title.centered())
             .border_set(border::THICK);
@@ -40,110 +41,29 @@ impl<'a> Widget for AppWidget<'a> {
         let inner_area = block.inner(area);
         block.render(area, buf);
 
-        let [left_area, right_area] = Layout::horizontal([Constraint::Fill(2), Constraint::Fill(5)])
+        let [metadata_area, right_area] = Layout::horizontal([Constraint::Fill(2), Constraint::Fill(5)])
             .margin(1)
             .areas(inner_area);
 
-        let [nav_area, margin_area ] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(3)])
-            .areas(left_area);
+        let [nav_area, margin_area ] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)])
+            .areas(metadata_area);
 
-        let vertical_separator = Block::default()
+        Block::default()
             .borders(Borders::RIGHT)
-            .fg(Color::Yellow);
-        vertical_separator.render(margin_area, buf);
+            .fg(Color::Yellow)
+            .render(margin_area, buf);
 
         // Render left panel (metadata)
-        render_metadata_panel(app, nav_area, buf);
+        let metadata_component = MetadataComponent::new(app.file_name.clone())
+            .with_title("File Metadata".to_string());
+        metadata_component.render(nav_area, buf);
 
         // Render right panel (tabs and content)
         render_right_panel(app, right_area, buf);
     }
 }
 
-fn render_metadata_panel(app: &App, area: Rect, buf: &mut Buffer) {
-    // Fetch parquet metadata once per render
-    let metadata_result = extract_parquet_file_metadata(&app.file_name);
-
-    let (file_name_display, kv_pairs): (String, Vec<(String, String)>) = match metadata_result {
-        Ok(md) => {
-            let codec_summary = md.codecs.join("  ");
-            let kv = vec![
-                ("Format version".into(), md.format_version),
-                ("Created by".into(), md.created_by),
-                ("Rows".into(), commas(md.rows)),
-                ("Columns".into(), md.columns.to_string()),
-                ("Row groups".into(), md.row_groups.to_string()),
-                ("Size (raw)".into(), human_readable_bytes(md.size_raw)),
-                ("Size (compressed)".into(), human_readable_bytes(md.size_compressed)),
-                ("Compression ratio".into(), format!("{:.2}x", md.compression_ratio)),
-                ("Codecs (cols)".into(), codec_summary),
-                ("Encodings".into(), md.encodings),
-                ("Avg row size".into(), format!("{} B", md.avg_row_size)),
-            ];
-            (md.file_name, kv)
-        }
-        Err(e) => (
-            app.file_name.clone(),
-            vec![("Error".into(), e.to_string())],
-        ),
-    };
-
-    // Build a paragraph block for the file name
-    let file_name_para = Paragraph::new(file_name_display.green())
-        .block(
-            Block::bordered()
-                .title(Line::from("File Name".yellow().bold()).centered())
-                .border_set(border::ROUNDED),
-        );
-
-    let metadata_block = Block::bordered()
-        .title(Line::from("File Metadata".yellow().bold()).centered())
-        .border_set(border::ROUNDED);
-
-    let kv_len = kv_pairs.len();
-    let max_key_len = kv_pairs.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
-
-    // Prepare rows for the widget
-    let rows: Vec<Row> = kv_pairs
-        .into_iter()
-        .map(|(k, v)| {
-            Row::new(vec![
-                Cell::from(k).bold().fg(Color::Blue),
-                Cell::from(v),
-            ])
-        })
-        .collect();
-
-    // Split left pane vertically: file name block on top, metadata table below
-    let [file_name_area, table_container_area, _spacer] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Max(kv_len as u16 + 2),
-        Constraint::Fill(1),
-    ])
-    .areas(area);
-
-    // Render the file name block
-    file_name_para.render(file_name_area, buf);
-
-    // Build the table widget
-    let desired_height = (rows.len() as u16 + 2).min(table_container_area.height);
-    let table_full_width = table_container_area.width;
-    let table = Table::new(rows, vec![Constraint::Length(max_key_len as u16), Constraint::Min(max_key_len as u16)])
-        .column_spacing(1)
-        .block(metadata_block);
-
-    // Compute area sized to table (but not exceeding available area)
-    let table_area = Rect {
-        x: table_container_area.x,
-        y: table_container_area.y,
-        width: table_full_width,
-        height: desired_height,
-    };
-
-    table.render(table_area, buf);
-}
-
-fn render_right_panel(app: &App, area: Rect, buf: &mut Buffer) {
+fn render_right_panel(app: &mut App, area: Rect, buf: &mut Buffer) {
     let [tabs_bar_area, content_area] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Fill(1),
@@ -151,16 +71,16 @@ fn render_right_panel(app: &App, area: Rect, buf: &mut Buffer) {
     .areas(area);
 
     // Build Tabs widget
-    let tab_titles: Vec<Line> = app.tabs.iter().map(|t| Line::from(*t)).collect();
-    let tabs_widget = Tabs::new(tab_titles)
-        .select(app.active_tab)
-        .block(Block::bordered().title("Tabs"));
+    let tabs_widget = TabsComponent::new(app.tabs.clone())
+        .with_selected_tab(app.active_tab)
+        .with_title("Tabs".to_string());
 
     tabs_widget.render(tabs_bar_area, buf);
 
     // Render content based on selected tab
     match app.active_tab {
         0 => render_schema_tab(app, content_area, buf),
+        1 => render_row_groups_tab(app, content_area, buf),
         _ => {
             let placeholder = Paragraph::new("Coming soon...")
                 .block(Block::bordered().title(Line::from(app.tabs[app.active_tab]).centered()).border_set(border::ROUNDED));
@@ -169,7 +89,49 @@ fn render_right_panel(app: &App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn render_schema_tab(app: &App, area: Rect, buf: &mut Buffer) {
+fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
+    // let placeholder = Paragraph::new("Coming soon...")
+    //     .block(Block::bordered().title(Line::from("Row Groups").centered()).border_set(border::ROUNDED));
+    // placeholder.render(area, buf);
+
+    let tree_width = app.schema_columns.iter().map(|line| {
+        match line {
+            SchemaColumnType::Root {display: ref d, ..} => d.len(),
+            SchemaColumnType::Primitive {display: ref d, ..} => d.len(),
+            SchemaColumnType::Group {display: ref d, ..} => d.len(),
+        }
+    }).max().unwrap_or(0);
+
+    let [tree_area, central_area] = Layout::horizontal([
+        Constraint::Length(tree_width as u16),
+        Constraint::Fill(1),
+    ]).areas(area);
+
+    render_schema_tree(app, tree_area, buf);
+
+    // now we render the stats for that row group
+    // split the area into 3 parts with majority in the center and others in the side
+
+    let [left_arrow_area, row_group_stats_area, right_arrow_area] = Layout::horizontal([
+        Constraint::Percentage(20),
+        Constraint::Percentage(60),
+        Constraint::Percentage(20),
+    ]).areas(central_area);
+
+
+    let md: ParquetMetaData = extract_file_metadata(&app.file_name)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        .unwrap();
+
+    ColumnMetadata::from_parquet_file(&md, 0, app.column_selected.unwrap_or(1) - 1).render(row_group_stats_area, buf);
+
+    // Block::bordered().title(Line::from("Row Group Stats").centered()).border_set(border::DOUBLE).render(row_group_stats_area, buf);
+
+
+    
+}
+
+fn render_schema_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     let tree_width = app.schema_columns.iter().map(|line| {
         match line {
             SchemaColumnType::Root {display: ref d, ..} => d.len(),
@@ -247,14 +209,7 @@ fn render_schema_tab(app: &App, area: Rect, buf: &mut Buffer) {
         (tree_area, table_area, None, None)
     };
 
-    // Render tree
-    // let schema_tree = SchemaTreeComponent::new(app.schema_columns.clone())
-    //     .with_selected_index(app.column_selected);
-    // schema_tree.render(areas.0, buf);
-
     render_schema_tree(app, areas.0, buf);
-    
-    // Render separator
     
     // Render columns table
     render_columns_table(table_rows, areas.1, buf, app);
@@ -268,9 +223,10 @@ fn render_schema_tab(app: &App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn render_schema_tree(app: &App, area: Rect, buf: &mut Buffer) {
+fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer) {
     // Calculate viewport height (subtract 2 for borders)
     let viewport_height = area.height.saturating_sub(2) as usize;
+    app.set_schema_tree_height(viewport_height);
 
     let [tree_area, line_area] = Layout::horizontal([
         Constraint::Fill(1),
@@ -280,24 +236,6 @@ fn render_schema_tree(app: &App, area: Rect, buf: &mut Buffer) {
     
     // Check if we need a scrollbar
     let needs_scrollbar = app.needs_scrollbar(viewport_height);
-    // let (tree_area, scrollbar_area) = if needs_scrollbar && area.width > 2 {
-    //     // Reserve 1 column for scrollbar
-    //     let tree_rect = Rect {
-    //         x: area.x,
-    //         y: area.y,
-    //         width: area.width.saturating_sub(1),
-    //         height: area.height,
-    //     };
-    //     let scrollbar_rect = Rect {
-    //         x: area.x + area.width.saturating_sub(1),
-    //         y: area.y + 1, // Start after top border
-    //         width: 1,
-    //         height: area.height.saturating_sub(2), // Exclude borders
-    //     };
-    //     (tree_rect, Some(scrollbar_rect))
-    // } else {
-    //     (area, None)
-    // };
 
     let mut tree_vec = vec![
         "Leaf".blue(),
@@ -377,7 +315,7 @@ fn render_schema_tree(app: &App, area: Rect, buf: &mut Buffer) {
             scrollable_items,
             effective_viewport,
             clamped_scroll_offset,
-        ).with_colors(Color::DarkGray, Color::White);
+        ).with_colors(Color::Yellow, Color::White);
         
         scrollbar.render(line_area, buf);
     } else {

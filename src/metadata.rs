@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::metadata::ParquetMetaData;
 
 #[derive(Debug)]
 pub struct ParquetFileMetadata {
@@ -19,10 +20,14 @@ pub struct ParquetFileMetadata {
     pub avg_row_size: u64,
 }
 
-pub fn extract_parquet_file_metadata(file_name: &str) -> Result<ParquetFileMetadata, Box<dyn std::error::Error>> {
+pub fn extract_file_metadata(file_name: &str) -> Result<ParquetMetaData, Box<dyn std::error::Error>> {
     let file = File::open(Path::new(file_name))?;
     let reader: SerializedFileReader<File> = SerializedFileReader::new(file)?;
-    let md = reader.metadata();
+    Ok(reader.metadata().clone())
+}
+
+pub fn extract_parquet_file_metadata(file_name: &str) -> Result<ParquetFileMetadata, Box<dyn std::error::Error>> {
+    let md: ParquetMetaData = extract_file_metadata(file_name)?;
 
     let binding = md.file_metadata().created_by();
     let version = md.file_metadata().version();

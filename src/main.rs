@@ -24,7 +24,7 @@ fn main() -> io::Result<()> {
 
 fn tui(path: &str) -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let app_result: Result<(), io::Error> = App::default().run(&mut terminal, path);
+    let app_result = App::default().run(&mut terminal, path);
     ratatui::restore();
     app_result
 }

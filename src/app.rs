@@ -15,21 +15,24 @@ pub struct App {
     pub schema_columns: Vec<SchemaColumnType>,
     pub schema_map: HashMap<String, ColumnType>,
     pub scroll_offset: usize,
+    pub row_group_selected: usize,
+    pub schema_tree_height: usize
 }
 
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal, path: &str) -> io::Result<()> {
         self.file_name = path.to_string();
-        self.tabs = vec!["Schema"];
+        self.tabs = vec!["Schema", "Row Groups", "Visualize"];
         self.active_tab = 0;
         self.column_selected = None;
         self.scroll_offset = 0;
+        self.row_group_selected = 0;
         
         let (schema_columns, schema_map) = crate::schema::build_schema_tree_lines(path)
             .map_err(| e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         self.schema_columns = schema_columns;
         self.schema_map = schema_map;
-        
+
         while !self.exit {
             terminal.draw(|frame| crate::ui::render_app(self, frame))?;
             self.handle_events()?;
@@ -37,7 +40,7 @@ impl App {
         Ok(())
     }
 
-    fn handle_events(&mut self) -> io::Result<()> {
+    fn handle_events(&mut self, ) -> io::Result<()> {
         match event::read()? {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 self.handle_key_event(key_event)
@@ -47,6 +50,10 @@ impl App {
         Ok(())
     }
 
+    pub fn set_schema_tree_height(&mut self, new_height: usize) {
+        self.schema_tree_height = new_height;
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
@@ -54,14 +61,20 @@ impl App {
                 if self.active_tab + 1 < self.tabs.len() {
                     self.active_tab += 1;
                 }
+                if self.active_tab == 1 && self.column_selected.is_none() {
+                    self.column_selected = Some(1);
+                }
             }
             KeyCode::Left => {
                 if self.active_tab > 0 {
                     self.active_tab -= 1;
                 }
+                if self.active_tab == 1 && self.column_selected.is_none() {
+                    self.column_selected = Some(1);
+                }
             }
             KeyCode::Down => {
-                if self.active_tab == 0 {
+                if self.active_tab == 0 || self.active_tab == 1 {
                     let total_columns: usize = self.schema_columns.len();
                     if let Some(idx) = self.column_selected {
                         if idx + 1 < total_columns {
@@ -74,12 +87,14 @@ impl App {
                 }
             }
             KeyCode::Up => {
-                if self.active_tab == 0 {
+                if self.active_tab == 0 || self.active_tab == 1 {
                     if let Some(idx) = self.column_selected {
                         if idx > 1 {
                             self.column_selected = Some(idx - 1);
                         } else {
-                            self.column_selected = None
+                            if self.active_tab != 1 {
+                                self.column_selected = None;
+                            }
                         }
                     }
                     self.adjust_scroll_for_selection();
@@ -93,6 +108,14 @@ impl App {
             KeyCode::PageUp => {
                 if self.active_tab == 0 {
                     self.scroll_up(2);
+                }
+            }
+            KeyCode::Char('l') => {
+                self.row_group_selected += 1;
+            }
+            KeyCode::Char('k') => {
+                if self.row_group_selected > 0 {
+                    self.row_group_selected -= 1;
                 }
             }
             _ => {}
@@ -116,8 +139,8 @@ impl App {
 
     fn adjust_scroll_for_selection(&mut self) {
         if let Some(_selected_idx) = self.column_selected {
-            // Use a reasonable default viewport height for selection adjustment
-            let viewport_height = 10;
+            // Set the viewport height from the schema tree height
+            let viewport_height = self.schema_tree_height;
             self.adjust_scroll_for_viewport(viewport_height);
         }
     }
