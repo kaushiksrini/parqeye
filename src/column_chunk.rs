@@ -1,9 +1,9 @@
-use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
+use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
 use ratatui::{
     buffer::Buffer,
     layout::{Rect, Layout, Constraint},
     prelude::Color,
-    widgets::{Block, Table, Row, Cell, Widget},
+    widgets::{Block, Table, Row, Cell, Widget, Paragraph},
     style::{Stylize},
     text::Line,
     symbols::border,
@@ -18,7 +18,14 @@ pub struct HasStats {
     pub has_page_encoding_stats: bool
 }
 
-pub struct ColumnMetadata {
+pub struct RowGroupStats {
+    pub rows: i64,
+    pub compressed_size: i64,
+    pub uncompressed_size: i64,
+    pub compression_ratio: String,
+}
+
+pub struct RowGroupColumnMetadata {
     pub file_offset: i64,
     // pub physical_type: String,
     pub file_path: String,
@@ -30,11 +37,11 @@ pub struct ColumnMetadata {
     pub compression_type: String,
 }
 
-impl ColumnMetadata {
+impl RowGroupColumnMetadata {
     pub fn from_parquet_file(metadata: &ParquetMetaData, row_group_idx: usize, column_idx: usize) -> Self {
         let column_chunk: &ColumnChunkMetaData = metadata.row_group(row_group_idx).column(column_idx);
 
-        ColumnMetadata {
+        RowGroupColumnMetadata {
             file_offset: column_chunk.file_offset(),
             num_values: column_chunk.num_values(),
             has_stats: HasStats {
@@ -51,7 +58,45 @@ impl ColumnMetadata {
     }
 }
 
-impl Widget for ColumnMetadata {
+impl RowGroupStats {
+    pub fn from_parquet_file(metadata: &ParquetMetaData, row_group_idx: usize) -> Self {
+        let row_group: &RowGroupMetaData = metadata.row_group(row_group_idx);
+        let compressed_size = row_group.columns().iter().map(|c| c.compressed_size()).sum();
+        let uncompressed_size = row_group.columns().iter().map(|c| c.uncompressed_size()).sum();
+        
+        RowGroupStats {
+            rows: row_group.num_rows(),
+            compressed_size: compressed_size,
+            uncompressed_size: uncompressed_size,
+            compression_ratio: format!("{:.2}x", (uncompressed_size as f64 / compressed_size as f64))
+        }
+    }
+}
+
+impl Widget for RowGroupStats {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let block = Block::bordered()
+            .title("Row Group Stats")
+            .border_set(border::DOUBLE);
+        
+        let inner_area = block.inner(area);
+        block.render(area, buf);
+        
+        // Create a simple stats display
+        let stats_text = format!(
+            "Rows: {}\nCompressed: {}\nUncompressed: {}\nRatio: {}",
+            commas(self.rows as u64),
+            human_readable_bytes(self.compressed_size as u64),
+            human_readable_bytes(self.uncompressed_size as u64),
+            self.compression_ratio
+        );
+        
+        let paragraph = Paragraph::new(stats_text);
+        paragraph.render(inner_area, buf);
+    }
+}
+
+impl Widget for RowGroupColumnMetadata {
     fn render(self, area: Rect, buf: &mut Buffer) {
 
         let kv_pairs = vec![
@@ -59,7 +104,7 @@ impl Widget for ColumnMetadata {
             ("Num Values", commas(self.num_values as u64)),
             ("Compressed Size", format!("{}", human_readable_bytes(self.total_compressed_size as u64))),
             ("Uncompressed Size", format!("{}", human_readable_bytes(self.total_uncompressed_size as u64))),
-            ("Compression Ratio", format!("{:.2}%", (self.total_compressed_size as f64 / self.total_uncompressed_size as f64) * 100.0)),
+            ("Compression Ratio", format!("{:.2}x", (self.total_uncompressed_size as f64 / self.total_compressed_size as f64))),
             ("Compression Type", format!("{}", self.compression_type)),
         ];
 
@@ -77,24 +122,22 @@ impl Widget for ColumnMetadata {
         
         let title = vec!["Column: ".into(), self.file_path.clone().yellow().bold()];
 
-        let [stats_area, table_area, _page_info_area] = Layout::vertical([
-            Constraint::Min(2),
-            Constraint::Fill(3),
-            Constraint::Fill(2),
-        ]).areas(area);
-
+        // First, create and render the outer block
         let block = Block::bordered()
             .title(Line::from(title).centered())
             .border_set(border::DOUBLE);
+        
+        let inner_area = block.inner(area);
+        block.render(area, buf);
 
-        let table_area_size = Rect {
-            x: table_area.x,
-            y: table_area.y,
-            width: table_area.width,
-            height: table_area.height,
-        };
+        // Now subdivide the inner area for stats and table
+        let [stats_area, table_area] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Fill(1),
+        ]).areas(inner_area);
 
-        table.block(block).render(table_area_size, buf);
+        // Render the table in the table area
+        table.render(table_area, buf);
 
         // Create 1x4 horizontal grid for stats
         let horizontal_areas = Layout::horizontal([
@@ -103,20 +146,20 @@ impl Widget for ColumnMetadata {
             Constraint::Percentage(25),
             Constraint::Percentage(25),
         ]).split(stats_area);
-        let first = horizontal_areas[0];
+        let first: Rect = horizontal_areas[0];
         let second = horizontal_areas[1];
         let third = horizontal_areas[2];
         let fourth = horizontal_areas[3];
 
         // Render each stats block
         self.render_stat_block("Statistics", self.has_stats.has_stats, first, buf);
-        self.render_stat_block("Dictionary Page", self.has_stats.has_dictionary_page, second, buf);
+        self.render_stat_block("Dict Page", self.has_stats.has_dictionary_page, second, buf);
         self.render_stat_block("Bloom Filter", self.has_stats.has_bloom_filter, third, buf);
         self.render_stat_block("Page Stats", self.has_stats.has_page_encoding_stats, fourth, buf);
     }
 }
 
-impl ColumnMetadata {
+impl RowGroupColumnMetadata {
     fn render_stat_block(&self, title: &str, has_stat: bool, area: Rect, buf: &mut Buffer) {
         let (symbol, color) = if has_stat {
             (format!("✓ {}", title), Color::Green)
