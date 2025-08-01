@@ -1,6 +1,6 @@
 use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
 use ratatui::{
-    buffer::Buffer, layout::{Constraint, Layout, Rect}, prelude::Color, style::Stylize, symbols::border, text::Line, widgets::{Block, Borders, Cell, Paragraph, Row, Table, Widget}
+    buffer::Buffer, layout::{Constraint, Layout, Rect}, prelude::Color, style::Stylize, symbols::border, text::Line, widgets::{Block, Borders, Cell, Row, Table, Widget}
 };
 
 use crate::utils::{human_readable_bytes, commas};
@@ -13,6 +13,7 @@ pub struct HasStats {
 }
 
 pub struct RowGroupStats {
+    pub row_group_idx: usize,
     pub rows: i64,
     pub compressed_size: i64,
     pub uncompressed_size: i64,
@@ -22,7 +23,7 @@ pub struct RowGroupStats {
 pub struct RowGroupColumnMetadata {
     pub file_offset: i64,
     // pub physical_type: String,
-    pub file_path: String,
+    pub column_path: String,
     pub has_stats: HasStats,
     // pub statistics: Option<Statistics>,
     pub total_compressed_size: i64,
@@ -42,7 +43,7 @@ impl RowGroupColumnMetadata {
                 has_bloom_filter: column_chunk.bloom_filter_offset().is_some(),
                 has_page_encoding_stats: column_chunk.page_encoding_stats().is_some() && column_chunk.page_encoding_stats().unwrap().len() > 0,
             },
-            file_path: column_chunk.column_descr().path().string(),
+            column_path: column_chunk.column_descr().path().string(),
             total_compressed_size: column_chunk.compressed_size(),
             total_uncompressed_size: column_chunk.uncompressed_size(),
             compression_type: column_chunk.compression().to_string(),
@@ -57,6 +58,7 @@ impl RowGroupStats {
         let uncompressed_size = row_group.columns().iter().map(|c| c.uncompressed_size()).sum();
         
         RowGroupStats {
+            row_group_idx: row_group_idx,
             rows: row_group.num_rows(),
             compressed_size: compressed_size,
             uncompressed_size: uncompressed_size,
@@ -67,24 +69,58 @@ impl RowGroupStats {
 
 impl Widget for RowGroupStats {
     fn render(self, area: Rect, buf: &mut Buffer) {
+
+        let title = vec![" Row Group: ".into(), format!("{}", self.row_group_idx).light_blue().bold(), " ".into()];
         let block = Block::bordered()
-            .title("Row Group Stats")
+            .title(Line::from(title).centered())
+            .borders(Borders::TOP)
             .border_set(border::DOUBLE);
         
-        let inner_area = block.inner(area);
+        let inner_area: Rect = block.inner(area);
         block.render(area, buf);
         
-        // Create a simple stats display
-        let stats_text = format!(
-            "Rows: {}\nCompressed: {}\nUncompressed: {}\nRatio: {}",
-            commas(self.rows as u64),
-            human_readable_bytes(self.compressed_size as u64),
-            human_readable_bytes(self.uncompressed_size as u64),
-            self.compression_ratio
-        );
+        // Create 1x4 horizontal grid for stats
+        let horizontal_areas = Layout::horizontal([
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+        ]).split(inner_area);
         
-        let paragraph = Paragraph::new(stats_text);
-        paragraph.render(inner_area, buf);
+        // Render each stat block
+        self.render_stat_block("Rows", &commas(self.rows as u64), horizontal_areas[0], buf);
+        self.render_stat_block("Compressed", &human_readable_bytes(self.compressed_size as u64), horizontal_areas[1], buf);
+        self.render_stat_block("Uncompressed", &human_readable_bytes(self.uncompressed_size as u64), horizontal_areas[2], buf);
+        self.render_stat_block("Ratio", &self.compression_ratio, horizontal_areas[3], buf);
+    }
+}
+
+impl RowGroupStats {
+    fn render_stat_block(&self, title: &str, value: &str, area: Rect, buf: &mut Buffer) {
+        let block = Block::bordered()
+            .title(title)
+            .border_style(ratatui::style::Style::default().fg(Color::Rgb(128, 128, 128))) // Gray color
+            .title_style(ratatui::style::Style::default().fg(Color::Rgb(211, 211, 211)));
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        // Center the value in the block
+        if inner.width > 0 && inner.height > 0 {
+            let value_x = inner.x + (inner.width.saturating_sub(value.len() as u16)) / 2;
+            let value_y = inner.y + inner.height / 2;
+            
+            if value_y < inner.y + inner.height {
+                for (i, ch) in value.chars().enumerate() {
+                    let x = value_x + i as u16;
+                    if x < inner.x + inner.width {
+                        buf.get_mut(x, value_y)
+                            .set_symbol(&ch.to_string())
+                            .set_style(ratatui::style::Style::default().fg(Color::LightMagenta).bold());
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -111,7 +147,7 @@ impl Widget for RowGroupColumnMetadata {
 
         let table = Table::new(rows, vec![Constraint::Length(20), Constraint::Length(20)]);
         
-        let title = vec![" Column: ".into(), self.file_path.clone().yellow().bold(), " ".into()];
+        let title = vec![" Column: ".into(), self.column_path.clone().yellow().bold(), " ".into()];
 
         // First, create and render the outer block
         let block = Block::bordered()

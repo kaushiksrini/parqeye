@@ -19,7 +19,7 @@ use crate::dictionary::extract_dictionary_values;
 use crate::utils::{human_readable_bytes, commas};
 use crate::components::{ScrollbarComponent, MetadataComponent, TabsComponent};
 
-use crate::column_chunk::RowGroupColumnMetadata;
+use crate::column_chunk::{RowGroupColumnMetadata, RowGroupStats};
 
 pub fn render_app(app: &mut App, frame: &mut Frame) {
     frame.render_widget(AppWidget(app), frame.area());
@@ -112,7 +112,7 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     // now we render the stats for that row group
     // split the area into 3 parts with majority in the center and others in the side
 
-    let [_left_arrow_area, row_group_stats_area, _right_arrow_area] = Layout::horizontal([
+    let [_left_arrow_area, main_stats_area, _right_arrow_area] = Layout::horizontal([
         Constraint::Percentage(20),
         Constraint::Percentage(60),
         Constraint::Percentage(20),
@@ -123,7 +123,13 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
         .unwrap();
 
-    RowGroupColumnMetadata::from_parquet_file(&md, 0, app.column_selected.unwrap_or(1) - 1).render(row_group_stats_area, buf);
+    let [row_group_stats_area, column_stats_area] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Fill(1),
+    ]).areas(main_stats_area);
+
+    RowGroupStats::from_parquet_file(&md, 0).render(row_group_stats_area, buf);
+    RowGroupColumnMetadata::from_parquet_file(&md, 0, app.column_selected.unwrap_or(1) - 1).render(column_stats_area, buf);
 
 
     
