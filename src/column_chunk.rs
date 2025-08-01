@@ -23,7 +23,6 @@ pub struct RowGroupColumnMetadata {
     pub file_offset: i64,
     // pub physical_type: String,
     pub file_path: String,
-    pub num_values: i64,
     pub has_stats: HasStats,
     // pub statistics: Option<Statistics>,
     pub total_compressed_size: i64,
@@ -37,7 +36,6 @@ impl RowGroupColumnMetadata {
 
         RowGroupColumnMetadata {
             file_offset: column_chunk.file_offset(),
-            num_values: column_chunk.num_values(),
             has_stats: HasStats {
                 has_stats: column_chunk.statistics().is_some(),
                 has_dictionary_page: column_chunk.dictionary_page_offset().is_some(),
@@ -95,7 +93,6 @@ impl Widget for RowGroupColumnMetadata {
 
         let kv_pairs = vec![
             ("File Offset", format!("{}", self.file_offset)),
-            ("Num Values", commas(self.num_values as u64)),
             ("Compressed Size", format!("{}", human_readable_bytes(self.total_compressed_size as u64))),
             ("Uncompressed Size", format!("{}", human_readable_bytes(self.total_uncompressed_size as u64))),
             ("Compression Ratio", format!("{:.2}x", (self.total_uncompressed_size as f64 / self.total_compressed_size as f64))),
