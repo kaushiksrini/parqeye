@@ -5,12 +5,11 @@ use ratatui::{
     prelude::Color,
     widgets::{Block, Table, Row, Cell, Widget},
     style::{Stylize},
-    text::{Line, Span},
+    text::Line,
     symbols::border,
 };
 
 use crate::utils::{human_readable_bytes, commas};
-
 
 pub struct HasStats {
     pub has_stats: bool,
@@ -28,6 +27,7 @@ pub struct ColumnMetadata {
     // pub statistics: Option<Statistics>,
     pub total_compressed_size: i64,
     pub total_uncompressed_size: i64,
+    pub compression_type: String,
 }
 
 impl ColumnMetadata {
@@ -46,6 +46,7 @@ impl ColumnMetadata {
             file_path: column_chunk.column_descr().path().string(),
             total_compressed_size: column_chunk.compressed_size(),
             total_uncompressed_size: column_chunk.uncompressed_size(),
+            compression_type: column_chunk.compression().to_string(),
         }
     }
 }
@@ -59,6 +60,7 @@ impl Widget for ColumnMetadata {
             ("Compressed Size", format!("{}", human_readable_bytes(self.total_compressed_size as u64))),
             ("Uncompressed Size", format!("{}", human_readable_bytes(self.total_uncompressed_size as u64))),
             ("Compression Ratio", format!("{:.2}%", (self.total_compressed_size as f64 / self.total_uncompressed_size as f64) * 100.0)),
+            ("Compression Type", format!("{}", self.compression_type)),
         ];
 
         let rows: Vec<Row> = kv_pairs
@@ -75,12 +77,11 @@ impl Widget for ColumnMetadata {
         
         let title = vec!["Column: ".into(), self.file_path.clone().yellow().bold()];
 
-        let main_areas = Layout::vertical([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ]).split(area);
-        let table_area = main_areas[0];
-        let stats_area = main_areas[1];
+        let [stats_area, table_area, _page_info_area] = Layout::vertical([
+            Constraint::Min(2),
+            Constraint::Fill(3),
+            Constraint::Fill(2),
+        ]).areas(area);
 
         let block = Block::bordered()
             .title(Line::from(title).centered())
@@ -95,33 +96,23 @@ impl Widget for ColumnMetadata {
 
         table.block(block).render(table_area_size, buf);
 
-        // Create 2x2 grid for stats
-        let vertical_areas = Layout::vertical([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
+        // Create 1x4 horizontal grid for stats
+        let horizontal_areas = Layout::horizontal([
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
         ]).split(stats_area);
-        let top_row = vertical_areas[0];
-        let bottom_row = vertical_areas[1];
-
-        let top_horizontal_areas = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ]).split(top_row);
-        let top_left = top_horizontal_areas[0];
-        let top_right = top_horizontal_areas[1];
-
-        let bottom_horizontal_areas = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ]).split(bottom_row);
-        let bottom_left = bottom_horizontal_areas[0];
-        let bottom_right = bottom_horizontal_areas[1];
+        let first = horizontal_areas[0];
+        let second = horizontal_areas[1];
+        let third = horizontal_areas[2];
+        let fourth = horizontal_areas[3];
 
         // Render each stats block
-        self.render_stat_block("Statistics", self.has_stats.has_stats, top_left, buf);
-        self.render_stat_block("Dictionary Page", self.has_stats.has_dictionary_page, top_right, buf);
-        self.render_stat_block("Bloom Filter", self.has_stats.has_bloom_filter, bottom_left, buf);
-        self.render_stat_block("Page Stats", self.has_stats.has_page_encoding_stats, bottom_right, buf);
+        self.render_stat_block("Statistics", self.has_stats.has_stats, first, buf);
+        self.render_stat_block("Dictionary Page", self.has_stats.has_dictionary_page, second, buf);
+        self.render_stat_block("Bloom Filter", self.has_stats.has_bloom_filter, third, buf);
+        self.render_stat_block("Page Stats", self.has_stats.has_page_encoding_stats, fourth, buf);
     }
 }
 
