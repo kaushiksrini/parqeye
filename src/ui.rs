@@ -19,7 +19,7 @@ use crate::dictionary::extract_dictionary_values;
 use crate::utils::{human_readable_bytes, commas};
 use crate::components::{ScrollbarComponent, MetadataComponent, TabsComponent};
 
-use crate::column_chunk::ColumnMetadata;
+use crate::column_chunk::RowGroupColumnMetadata;
 
 pub fn render_app(app: &mut App, frame: &mut Frame) {
     frame.render_widget(AppWidget(app), frame.area());
@@ -123,7 +123,7 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
         .unwrap();
 
-    ColumnMetadata::from_parquet_file(&md, 0, app.column_selected.unwrap_or(1) - 1).render(row_group_stats_area, buf);
+    RowGroupColumnMetadata::from_parquet_file(&md, 0, app.column_selected.unwrap_or(1) - 1).render(row_group_stats_area, buf);
 
 
     
