@@ -125,8 +125,6 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
 
     ColumnMetadata::from_parquet_file(&md, 0, app.column_selected.unwrap_or(1) - 1).render(row_group_stats_area, buf);
 
-    // Block::bordered().title(Line::from("Row Group Stats").centered()).border_set(border::DOUBLE).render(row_group_stats_area, buf);
-
 
     
 }
