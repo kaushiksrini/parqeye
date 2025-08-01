@@ -1,12 +1,6 @@
 use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
 use ratatui::{
-    buffer::Buffer,
-    layout::{Rect, Layout, Constraint},
-    prelude::Color,
-    widgets::{Block, Table, Row, Cell, Widget, Paragraph},
-    style::{Stylize},
-    text::Line,
-    symbols::border,
+    buffer::Buffer, layout::{Constraint, Layout, Rect}, prelude::Color, style::Stylize, symbols::border, text::Line, widgets::{Block, Borders, Cell, Paragraph, Row, Table, Widget}
 };
 
 use crate::utils::{human_readable_bytes, commas};
@@ -120,11 +114,12 @@ impl Widget for RowGroupColumnMetadata {
 
         let table = Table::new(rows, vec![Constraint::Length(20), Constraint::Length(20)]);
         
-        let title = vec!["Column: ".into(), self.file_path.clone().yellow().bold()];
+        let title = vec![" Column: ".into(), self.file_path.clone().yellow().bold(), " ".into()];
 
         // First, create and render the outer block
         let block = Block::bordered()
             .title(Line::from(title).centered())
+            .borders(Borders::TOP)
             .border_set(border::DOUBLE);
         
         let inner_area = block.inner(area);
