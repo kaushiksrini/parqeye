@@ -1,9 +1,23 @@
 use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::basic::{PageType, Encoding};
+use std::fs::File;
 use ratatui::{
     buffer::Buffer, layout::{Constraint, Layout, Rect}, prelude::Color, style::Stylize, symbols::border, text::Line, widgets::{Block, Borders, Cell, Row, Table, Widget}
 };
 
 use crate::utils::{human_readable_bytes, commas};
+
+pub struct RowGroupPageStats {
+    pub page_stats: Vec<PageStats>,
+}
+
+pub struct PageStats {
+    pub page_type: String,
+    pub size: usize,
+    pub rows: usize,
+    pub encoding: String,
+}
 
 pub struct HasStats {
     pub has_stats: bool,
@@ -29,6 +43,111 @@ pub struct RowGroupColumnMetadata {
     pub total_compressed_size: i64,
     pub total_uncompressed_size: i64,
     pub compression_type: String,
+}
+
+impl RowGroupPageStats {
+    pub fn from_parquet_file(file_path: &str, _metadata: &ParquetMetaData, row_group_idx: usize, column_idx: usize) -> Result<Self, Box<dyn std::error::Error>> {
+        // TODO: make async and reduce file opening to once. 
+        let file = File::open(file_path)?;
+        let parquet_reader = SerializedFileReader::new(file)?;
+        
+        // Get the page reader for this column
+        let mut page_reader = parquet_reader.get_row_group(row_group_idx)?
+            .get_column_page_reader(column_idx)?;
+        
+        let mut page_stats = Vec::new();
+        
+        // Iterate through pages and collect stats
+        while let Ok(page) = page_reader.get_next_page() {
+            if let Some(page) = page {
+                let page_type = match page.page_type() {
+                    PageType::DATA_PAGE => "Data Page".to_string(),
+                    PageType::INDEX_PAGE => "Index Page".to_string(),
+                    PageType::DICTIONARY_PAGE => "Dictionary Page".to_string(),
+                    PageType::DATA_PAGE_V2 => "Data Page V2".to_string(),
+                };
+                
+                let encoding = match page.encoding() {
+                    Encoding::PLAIN => "Plain".to_string(),
+                    Encoding::PLAIN_DICTIONARY => "Plain Dictionary".to_string(),
+                    Encoding::RLE => "RLE".to_string(),
+                    Encoding::DELTA_BINARY_PACKED => "Delta Binary Packed".to_string(),
+                    Encoding::DELTA_LENGTH_BYTE_ARRAY => "Delta Length Byte Array".to_string(),
+                    Encoding::DELTA_BYTE_ARRAY => "Delta Byte Array".to_string(),
+                    Encoding::RLE_DICTIONARY => "RLE Dictionary".to_string(),
+                    Encoding::BYTE_STREAM_SPLIT => "Byte Stream Split".to_string(),
+                    _ => format!("{:?}", page.encoding()), // Handle any other encoding types
+                };
+                
+                page_stats.push(PageStats {
+                    page_type,
+                    size: page.buffer().len(),
+                    rows: page.num_values() as usize,
+                    encoding,
+                });
+            } else {
+                break;
+            }
+        }
+        
+        Ok(RowGroupPageStats { page_stats })
+    }
+}
+
+impl Widget for RowGroupPageStats {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let block = Block::bordered()
+            .title(" Page Information ")
+            .border_style(ratatui::style::Style::default().fg(Color::Rgb(128, 128, 128)))
+            .title_style(ratatui::style::Style::default().fg(Color::LightBlue).bold());
+        
+        let inner_area = block.inner(area);
+        block.render(area, buf);
+        
+        if self.page_stats.is_empty() {
+            let no_data = Table::new(
+                vec![Row::new(vec![Cell::from("No page data available")])],
+                vec![Constraint::Fill(1)]
+            );
+            no_data.render(inner_area, buf);
+            return;
+        }
+        
+        // Create table headers
+        let header = Row::new(vec![
+            Cell::from("#").bold().fg(Color::Blue),
+            Cell::from("Page Type").bold().fg(Color::Blue),
+            Cell::from("Size").bold().fg(Color::Blue),
+            Cell::from("Rows").bold().fg(Color::Blue),
+            Cell::from("Encoding").bold().fg(Color::Blue),
+        ]);
+        
+        // Create table rows from page stats
+        let rows: Vec<Row> = self.page_stats
+            .into_iter()
+            .enumerate()
+            .map(|(i, page)| {
+                Row::new(vec![
+                    Cell::from(format!("{}", i)),
+                    Cell::from(page.page_type),
+                    Cell::from(human_readable_bytes(page.size as u64)),
+                    Cell::from(commas(page.rows as u64)),
+                    Cell::from(page.encoding),
+                ])
+            })
+            .collect();
+        
+        let table = Table::new(rows, vec![
+            Constraint::Max(3),  // Page Number
+            Constraint::Fill(1),  // Page Type
+            Constraint::Fill(1),  // Size
+            Constraint::Fill(1),  // Rows
+            Constraint::Fill(1),     // Encoding
+        ])
+        .header(header);
+        
+        table.render(inner_area, buf);
+    }
 }
 
 impl RowGroupColumnMetadata {
@@ -145,7 +264,7 @@ impl Widget for RowGroupColumnMetadata {
         })
         .collect();
 
-        let table = Table::new(rows, vec![Constraint::Length(20), Constraint::Length(20)]);
+        let table = Table::new(rows, vec![Constraint::Length(18), Constraint::Length(20)]);
         
         let title = vec![" Column: ".into(), self.column_path.clone().yellow().bold(), " ".into()];
 
@@ -158,10 +277,10 @@ impl Widget for RowGroupColumnMetadata {
         let inner_area = block.inner(area);
         block.render(area, buf);
 
-        // Now subdivide the inner area for stats and table
+        // Now subdivide the inner area for stats, table
         let [stats_area, table_area] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Fill(1),
+            Constraint::Length(3),   // Stats area (1x4 grid)
+            Constraint::Fill(2),     // Table area (column metadata)
         ]).areas(inner_area);
 
         // Render the table in the table area
