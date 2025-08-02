@@ -110,7 +110,7 @@ impl App {
                     self.scroll_up(2);
                 }
             }
-            KeyCode::Char('l') => {
+            KeyCode::Char('j') => {
                 self.row_group_selected += 1;
             }
             KeyCode::Char('k') => {
