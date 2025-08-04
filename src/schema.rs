@@ -126,7 +126,7 @@ pub fn build_schema_tree_lines(file_name: &str) -> Result<(Vec<SchemaColumnType>
     }
 
     let mut lines: Vec<SchemaColumnType> = Vec::new();
-    lines.push(SchemaColumnType::Root {name: "root".to_string(), display: "└─ root (message)".to_string()});
+    lines.push(SchemaColumnType::Root {name: "root".to_string(), display: "└─ root".to_string()});
 
     let mut column_to_type: HashMap<String, ColumnType> = HashMap::new();
     let children = root.get_fields();
