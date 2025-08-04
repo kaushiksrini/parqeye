@@ -1,9 +1,10 @@
 use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::basic::{PageType, Encoding};
+use ratatui::widgets::{Axis, Chart, Dataset};
 use std::fs::File;
 use ratatui::{
-    buffer::Buffer, layout::{Constraint, Layout, Rect}, prelude::Color, style::Stylize, symbols::border, text::Line, widgets::{Block, Borders, Cell, Row, Table, Widget}
+    buffer::Buffer, layout::{Constraint, Layout, Rect}, prelude::Color, style::{Style, Stylize}, symbols::{border, self}, text::Line, widgets::{Block, Borders, Cell, Row, Table, Widget}
 };
 
 use crate::utils::{human_readable_bytes, commas};
@@ -334,4 +335,169 @@ impl RowGroupColumnMetadata {
             }
         }
     }
+}
+
+pub fn calculate_row_group_stats(file_path: &str) -> Result<Vec<RowGroupStats>, Box<dyn std::error::Error>> {
+    let file = File::open(file_path)?;
+    let parquet_reader = SerializedFileReader::new(file)?;
+    let metadata = parquet_reader.metadata();
+    let row_group_stats = metadata.row_groups().iter().enumerate().map(|(i, _)| RowGroupStats::from_parquet_file(metadata, i)).collect();
+    Ok(row_group_stats)
+}
+
+pub fn render_row_group_charts(row_group_stats: &Vec<RowGroupStats>, area: Rect, buf: &mut Buffer) {
+    // Split the area into two charts vertically
+    let chart_areas = Layout::vertical([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+    ]).split(area);
+
+    // Chart 1: Scatter plot of compressed vs uncompressed sizes per row group
+    render_size_comparison_chart(row_group_stats, chart_areas[0], buf);
+    
+    // Chart 2: Compression ratios vs row group number
+    render_compression_ratio_chart(row_group_stats, chart_areas[1], buf);
+}
+
+fn render_size_comparison_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect, buf: &mut Buffer) {
+    // Prepare data: (row_group_index, size) pairs
+    let compressed_data: Vec<(f64, f64)> = row_group_stats
+        .iter()
+        .map(|rg| (rg.row_group_idx as f64, rg.compressed_size as f64))
+        .collect();
+    
+    let uncompressed_data: Vec<(f64, f64)> = row_group_stats
+        .iter()
+        .map(|rg| (rg.row_group_idx as f64, rg.uncompressed_size as f64))
+        .collect();
+
+    // Find max size for y-axis bounds
+    let max_compressed = compressed_data.iter().map(|(_, size)| *size).fold(0.0, f64::max);
+    let max_uncompressed = uncompressed_data.iter().map(|(_, size)| *size).fold(0.0, f64::max);
+    let max_size = max_compressed.max(max_uncompressed);
+    
+    // Find x-axis bounds
+    let max_row_group = row_group_stats.len() as f64 - 1.0;
+
+    let datasets = vec![
+        Dataset::default()
+            .name("Compressed")
+            .marker(symbols::Marker::Dot)
+            .style(Style::default().fg(Color::Blue))
+            .data(&compressed_data),
+        Dataset::default()
+            .name("Uncompressed")
+            .marker(symbols::Marker::Dot)
+            .style(Style::default().fg(Color::Red))
+            .data(&uncompressed_data),
+    ];
+
+    // Create x-axis labels (row group indices)
+    let x_labels: Vec<String> = (0..row_group_stats.len())
+        .step_by((row_group_stats.len() / 5).max(1)) // Show ~5 labels
+        .map(|i| i.to_string())
+        .collect();
+    
+    // Create y-axis labels (size values)
+    let y_step = (max_size * 1.1) / 4.0; // 4 intervals
+    let y_labels: Vec<String> = (0..4)
+        .map(|i| {
+            let value = i as f64 * y_step;
+            if value >= 1_000_000.0 {
+                format!("{:.1}M", value / (1_024.0 * 1_024.0))
+            } else if value >= 1_000.0 {
+                format!("{:.1}K", value / 1_024.0)
+            } else {
+                format!("{:.0}", value)
+            }
+        })
+        .collect();
+    
+    let title = vec!["Compressed".light_blue().bold(), " vs ".into(), "Uncompressed".light_red().bold(), " sizes (B)".into()];
+    let chart = Chart::new(datasets)
+        .block(
+            Block::default()
+                .title(Line::from(title).centered())  // Y-axis label at top
+                .title_bottom("Row Group".dark_gray())  // X-axis label at bottom
+                .borders(Borders::NONE)
+        )
+        .x_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::White))
+                .bounds([0.0, max_row_group])
+                .labels(x_labels)
+        )
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::White))
+                .bounds([0.0, max_size * 1.1])
+                .labels(y_labels)
+        );
+
+    chart.render(area, buf);
+}
+
+fn render_compression_ratio_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect, buf: &mut Buffer) {
+    // Prepare compression ratio data: (row_group_index, compression_ratio)
+    let ratio_data: Vec<(f64, f64)> = row_group_stats
+        .iter()
+        .map(|rg| {
+            let ratio = if rg.compressed_size > 0 {
+                rg.uncompressed_size as f64 / rg.compressed_size as f64
+            } else {
+                1.0
+            };
+            (rg.row_group_idx as f64, ratio)
+        })
+        .collect();
+
+    // Find bounds
+    let max_ratio = ratio_data.iter().map(|(_, ratio)| *ratio).fold(0.0, f64::max);
+    let max_row_group = row_group_stats.len() as f64 - 1.0;
+
+    let datasets = vec![
+        Dataset::default()
+            .name("Compression Ratio")
+            .marker(symbols::Marker::Dot)
+            .style(Style::default().fg(Color::Green))
+            .data(&ratio_data),
+    ];
+
+    // Create x-axis labels (row group indices)
+    let x_labels: Vec<String> = (0..row_group_stats.len())
+        .step_by((row_group_stats.len() / 4).max(1)) // Show ~5 labels
+        .map(|i| i.to_string())
+        .collect();
+    
+    // Create y-axis labels (compression ratio values)
+    let y_range = max_ratio * 1.1 - 1.0;
+    let y_step = y_range / 4.0; // 4 intervals
+    let y_labels: Vec<String> = (0..4)
+        .map(|i| {
+            let value = 1.0 + (i as f64 * y_step);
+            format!("{:.1}x", value)
+        })
+        .collect();
+
+    let chart = Chart::new(datasets)
+        .block(
+            Block::default()
+                .title("Compression Ratio")  // Y-axis label at top
+                .title_bottom("Row Group".dark_gray())   // X-axis label at bottom
+                .borders(Borders::NONE)
+        )
+        .x_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::White))
+                .bounds([0.0, max_row_group])
+                .labels(x_labels)
+        )
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::White))
+                .bounds([1.0, max_ratio * 1.1])
+                .labels(y_labels)
+        );
+
+    chart.render(area, buf);
 }

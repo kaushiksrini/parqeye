@@ -4,8 +4,9 @@ use ratatui::DefaultTerminal;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 
 use crate::schema::{SchemaColumnType, ColumnType};
+use crate::column_chunk::RowGroupStats;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct App {
     pub file_name: String,
     pub exit: bool,
@@ -16,7 +17,8 @@ pub struct App {
     pub schema_map: HashMap<String, ColumnType>,
     pub scroll_offset: usize,
     pub row_group_selected: usize,
-    pub schema_tree_height: usize
+    pub schema_tree_height: usize,
+    pub row_group_stats: Vec<RowGroupStats>,
 }
 
 impl App {
@@ -32,6 +34,9 @@ impl App {
             .map_err(| e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         self.schema_columns = schema_columns;
         self.schema_map = schema_map;
+
+        // calculate row group stats
+        self.row_group_stats = crate::column_chunk::calculate_row_group_stats(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
         while !self.exit {
             terminal.draw(|frame| crate::ui::render_app(self, frame))?;
