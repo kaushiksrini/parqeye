@@ -178,7 +178,7 @@ impl RowGroupStats {
         let uncompressed_size = row_group.columns().iter().map(|c| c.uncompressed_size()).sum();
         
         RowGroupStats {
-            row_group_idx: row_group_idx,
+            row_group_idx: row_group_idx + 1,
             rows: row_group.num_rows(),
             compressed_size: compressed_size,
             uncompressed_size: uncompressed_size,
@@ -341,7 +341,7 @@ pub fn calculate_row_group_stats(file_path: &str) -> Result<Vec<RowGroupStats>, 
     let file = File::open(file_path)?;
     let parquet_reader = SerializedFileReader::new(file)?;
     let metadata = parquet_reader.metadata();
-    let row_group_stats = metadata.row_groups().iter().enumerate().map(|(i, _)| RowGroupStats::from_parquet_file(metadata, i)).collect();
+    let row_group_stats = metadata.row_groups().iter().enumerate().map(|(i, _)| RowGroupStats::from_parquet_file(metadata, i )).collect();
     Ok(row_group_stats)
 }
 
@@ -394,13 +394,16 @@ fn render_size_comparison_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect
     ];
 
     // Create x-axis labels (row group indices)
-    let x_labels: Vec<String> = (0..row_group_stats.len())
-        .step_by((row_group_stats.len() / 5).max(1)) // Show ~5 labels
-        .map(|i| i.to_string())
-        .collect();
+    let x_labels = vec![
+        "0".to_string(),
+        format!("{}", (row_group_stats.len() / 4).max(1)),
+        format!("{}", (row_group_stats.len() / 2).max(1)),
+        format!("{}", (row_group_stats.len() * 3 / 4).max(1)),
+        format!("{}", row_group_stats.len()),
+    ];
     
     // Create y-axis labels (size values)
-    let y_step = (max_size * 1.1) / 4.0; // 4 intervals
+    let y_step = (max_size * 1.5) / 4.0; // 4 intervals
     let y_labels: Vec<String> = (0..4)
         .map(|i| {
             let value = i as f64 * y_step;
@@ -431,7 +434,7 @@ fn render_size_comparison_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect
         .y_axis(
             Axis::default()
                 .style(Style::default().fg(Color::White))
-                .bounds([0.0, max_size * 1.1])
+                .bounds([0.0, max_size * 1.5])
                 .labels(y_labels)
         );
 
@@ -465,26 +468,30 @@ fn render_compression_ratio_chart(row_group_stats: &Vec<RowGroupStats>, area: Re
     ];
 
     // Create x-axis labels (row group indices)
-    let x_labels: Vec<String> = (0..row_group_stats.len())
-        .step_by((row_group_stats.len() / 4).max(1)) // Show ~5 labels
-        .map(|i| i.to_string())
-        .collect();
+    let x_labels = vec![
+        "0".to_string(),
+        format!("{}", (row_group_stats.len() / 4).max(1)),
+        format!("{}", (row_group_stats.len() / 2).max(1)),
+        format!("{}", (row_group_stats.len() * 3 / 4).max(1)),
+        format!("{}", row_group_stats.len()),
+    ];
     
     // Create y-axis labels (compression ratio values)
     let y_range = max_ratio * 1.1 - 1.0;
     let y_step = y_range / 4.0; // 4 intervals
-    let y_labels: Vec<String> = (0..4)
-        .map(|i| {
-            let value = 1.0 + (i as f64 * y_step);
-            format!("{:.1}x", value)
-        })
-        .collect();
+
+    let y_labels = vec![
+        "1.0x".to_string(),
+        format!("{:.1}x", 1.0 + y_step),
+        format!("{:.1}x", 1.0 + y_step * 2.0),
+        format!("{:.1}x", 1.0 + y_step * 3.0),
+    ];
 
     let chart = Chart::new(datasets)
         .block(
             Block::default()
                 .title("Compression Ratio".yellow())  // Y-axis label at top
-                .title_bottom("Row Group".dark_gray())   // X-axis label at bottom
+                // .title_bottom("Row Group".dark_gray())   // X-axis label at bottom
                 .borders(Borders::NONE)
         )
         .x_axis(
