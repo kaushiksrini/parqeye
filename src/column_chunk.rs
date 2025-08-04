@@ -348,15 +348,16 @@ pub fn calculate_row_group_stats(file_path: &str) -> Result<Vec<RowGroupStats>, 
 pub fn render_row_group_charts(row_group_stats: &Vec<RowGroupStats>, area: Rect, buf: &mut Buffer) {
     // Split the area into two charts vertically
     let chart_areas = Layout::vertical([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
     ]).split(area);
 
     // Chart 1: Scatter plot of compressed vs uncompressed sizes per row group
     render_size_comparison_chart(row_group_stats, chart_areas[0], buf);
     
     // Chart 2: Compression ratios vs row group number
-    render_compression_ratio_chart(row_group_stats, chart_areas[1], buf);
+    render_compression_ratio_chart(row_group_stats, chart_areas[2], buf);
 }
 
 fn render_size_comparison_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect, buf: &mut Buffer) {
@@ -459,7 +460,7 @@ fn render_compression_ratio_chart(row_group_stats: &Vec<RowGroupStats>, area: Re
         Dataset::default()
             .name("Compression Ratio")
             .marker(symbols::Marker::Dot)
-            .style(Style::default().fg(Color::Green))
+            .style(Style::default().fg(Color::Yellow))
             .data(&ratio_data),
     ];
 
@@ -482,7 +483,7 @@ fn render_compression_ratio_chart(row_group_stats: &Vec<RowGroupStats>, area: Re
     let chart = Chart::new(datasets)
         .block(
             Block::default()
-                .title("Compression Ratio")  // Y-axis label at top
+                .title("Compression Ratio".yellow())  // Y-axis label at top
                 .title_bottom("Row Group".dark_gray())   // X-axis label at bottom
                 .borders(Borders::NONE)
         )
