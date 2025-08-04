@@ -19,6 +19,7 @@ pub struct App {
     pub row_group_selected: usize,
     pub schema_tree_height: usize,
     pub row_group_stats: Vec<RowGroupStats>,
+    pub primitive_columns_idx: HashMap<String, usize>,
 }
 
 impl App {
@@ -34,6 +35,12 @@ impl App {
             .map_err(| e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         self.schema_columns = schema_columns;
         self.schema_map = schema_map;
+
+        for (idx, c) in self.schema_columns.iter().filter(|c| matches!(c, SchemaColumnType::Primitive { .. })).enumerate() {
+            if let SchemaColumnType::Primitive { name, .. } = c {
+                self.primitive_columns_idx.insert(name.clone(), idx);
+            }
+        }
 
         // calculate row group stats
         self.row_group_stats = crate::column_chunk::calculate_row_group_stats(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;

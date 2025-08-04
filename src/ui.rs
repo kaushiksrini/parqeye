@@ -90,17 +90,13 @@ fn render_right_panel(app: &mut App, area: Rect, buf: &mut Buffer) {
 }
 
 fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
-    // let placeholder = Paragraph::new("Coming soon...")
-    //     .block(Block::bordered().title(Line::from("Row Groups").centered()).border_set(border::ROUNDED));
-    // placeholder.render(area, buf);
-
     let tree_width = app.schema_columns.iter().map(|line| {
         match line {
             SchemaColumnType::Root {display: ref d, ..} => d.len(),
             SchemaColumnType::Primitive {display: ref d, ..} => d.len(),
             SchemaColumnType::Group {display: ref d, ..} => d.len(),
         }
-    }).max().unwrap_or(0);
+    }).max().unwrap_or(0).max(24); // max for the bottom of the chart
 
     let [tree_area, central_area] = Layout::horizontal([
         Constraint::Length(tree_width as u16),
@@ -112,9 +108,10 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     // now we render the stats for that row group
     // split the area into 3 parts with majority in the center and others in the side
 
-    let [main_stats_area, charts_area] = Layout::horizontal([
-        Constraint::Percentage(60),
+    let [main_stats_area, _, column_stats_area] = Layout::horizontal([
         Constraint::Percentage(40),
+        Constraint::Length(1),
+        Constraint::Percentage(60),
     ]).areas(central_area);
 
 
@@ -125,9 +122,8 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     // get a ParquetObjectReader for a file
     // let reader = ParquetObjectReader::new(app.file_name.clone());
 
-    let [row_group_stats_area, column_stats_area, page_stats_area] = Layout::vertical([
+    let [row_group_stats_area, charts_area] = Layout::vertical([
         Constraint::Length(4),
-        Constraint::Length(10),
         Constraint::Fill(1),
     ]).areas(main_stats_area);
 
@@ -135,10 +131,37 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     app.row_group_selected = app.row_group_selected.min(max_row_group_idx);
 
     RowGroupStats::from_parquet_file(&md, app.row_group_selected).render(row_group_stats_area, buf);
-    RowGroupColumnMetadata::from_parquet_file(&md, app.row_group_selected, app.column_selected.unwrap_or(1) - 1).render(column_stats_area, buf);
-    RowGroupPageStats::from_parquet_file(&app.file_name, &md, app.row_group_selected, app.column_selected.unwrap_or(1) - 1).unwrap().render(page_stats_area, buf);
-
     render_row_group_charts(&app.row_group_stats, charts_area, buf);
+
+    let [row_group_column_metadata_area, row_group_page_stats_area] = Layout::vertical([
+        Constraint::Length(10),
+        Constraint::Fill(1),
+    ]).areas(column_stats_area);
+
+
+    if let Some(column_selected) = app.column_selected {
+        match app.schema_columns[column_selected] {
+            SchemaColumnType::Primitive { ref name, .. } => {
+                let column_idx = app.primitive_columns_idx[name];
+                RowGroupColumnMetadata::from_parquet_file(&md, app.row_group_selected, column_idx).render(row_group_column_metadata_area, buf);
+                RowGroupPageStats::from_parquet_file(&app.file_name, &md, app.row_group_selected, column_idx).unwrap().render(row_group_page_stats_area, buf);
+                
+            }
+            SchemaColumnType::Group { .. } => {
+                let placeholder = Paragraph::new("Column stats unavailable for groups");
+                placeholder.render(row_group_column_metadata_area, buf);
+            },
+            _ => {
+                let placeholder = Paragraph::new("Coming soon...")
+                    .block(Block::bordered().title(Line::from(app.tabs[app.active_tab]).centered()).border_set(border::ROUNDED));
+                placeholder.render(column_stats_area, buf);
+            }
+        }
+    }
+
+    
+
+    
 }
 
 fn render_schema_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
