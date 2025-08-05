@@ -25,14 +25,14 @@ pub struct App {
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal, path: &str) -> io::Result<()> {
         self.file_name = path.to_string();
-        self.tabs = vec!["Schema", "Row Groups", "Visualize"];
+        self.tabs = vec!["Schema", "Row Groups"];
         self.active_tab = 0;
         self.column_selected = None;
         self.scroll_offset = 0;
         self.row_group_selected = 0;
         
         let (schema_columns, schema_map) = crate::schema::build_schema_tree_lines(path)
-            .map_err(| e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(| e| io::Error::other(e.to_string()))?;
         self.schema_columns = schema_columns;
         self.schema_map = schema_map;
 
@@ -43,7 +43,7 @@ impl App {
         }
 
         // calculate row group stats
-        self.row_group_stats = crate::column_chunk::calculate_row_group_stats(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        self.row_group_stats = crate::column_chunk::calculate_row_group_stats(path).map_err(|e| io::Error::other(e.to_string()))?;
 
         while !self.exit {
             terminal.draw(|frame| crate::ui::render_app(self, frame))?;
@@ -103,10 +103,8 @@ impl App {
                     if let Some(idx) = self.column_selected {
                         if idx > 1 {
                             self.column_selected = Some(idx - 1);
-                        } else {
-                            if self.active_tab != 1 {
-                                self.column_selected = None;
-                            }
+                        } else if self.active_tab != 1 {
+                            self.column_selected = None;
                         }
                     }
                     self.adjust_scroll_for_selection();

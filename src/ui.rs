@@ -116,7 +116,7 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
 
 
     let md: ParquetMetaData = extract_file_metadata(&app.file_name)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| io::Error::other(e.to_string()))
         .unwrap();
 
     // get a ParquetObjectReader for a file

@@ -24,7 +24,7 @@ pub fn human_readable_count(n: u64) -> String {
         unit += 1;
     }
     if unit == 0 {
-        format!("{}", n)
+        format!("{n}")
     } else {
         format!("{:.1} {}", value, UNITS[unit])
     }
@@ -33,7 +33,7 @@ pub fn human_readable_count(n: u64) -> String {
 pub fn truncate_str(s: &str, max: usize) -> String {
     if s.chars().count() > max {
         let truncated: String = s.chars().take(max - 1).collect();
-        format!("{}…", truncated)
+        format!("{truncated}…")
     } else {
         s.to_string()
     }

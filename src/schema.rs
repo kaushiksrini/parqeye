@@ -47,7 +47,7 @@ pub fn build_schema_tree_lines(file_name: &str) -> Result<(Vec<SchemaColumnType>
             let col_chunk = rg.column(col_idx);
             codecs.insert(format!("{:?}", col_chunk.compression()));
             for enc in col_chunk.encodings() {
-                encs.insert(format!("{:?}", enc));
+                encs.insert(format!("{enc:?}"));
             }
         }
         let mut codec_vec: Vec<String> = codecs.into_iter().collect();
@@ -78,8 +78,8 @@ pub fn build_schema_tree_lines(file_name: &str) -> Result<(Vec<SchemaColumnType>
             let physical = format!("{:?}", node.get_physical_type());
             let logical = match node.get_basic_info().logical_type() {
                 Some(logical) => match logical {
-                    LogicalType::Decimal { scale, precision } => format!("Decimal({},{})", scale, precision),
-                    LogicalType::Integer { bit_width, is_signed } => format!("Integer({},{})", bit_width, if is_signed { "sign" } else { "unsign" }),
+                    LogicalType::Decimal { scale, precision } => format!("Decimal({scale},{precision})"),
+                    LogicalType::Integer { bit_width, is_signed } => format!("Integer({bit_width},{})", if is_signed { "sign" } else { "unsign" }),
                     LogicalType::Time { is_adjusted_to_u_t_c, unit } => match unit {
                         TimeUnit::MILLIS(_) => format!("Time({}, millis)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
                         TimeUnit::MICROS(_) => format!("Time({}, micros)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
@@ -90,7 +90,7 @@ pub fn build_schema_tree_lines(file_name: &str) -> Result<(Vec<SchemaColumnType>
                         TimeUnit::MICROS(_) => format!("Timestamp({}, micros)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
                         TimeUnit::NANOS(_) => format!("Timestamp({}, nanos)", if is_adjusted_to_u_t_c { "utc" } else { "local" }),
                     },
-                    _ => format!("{:?}", logical),
+                    _ => format!("{logical:?}"),
                 },
                 None => String::new(),
             };

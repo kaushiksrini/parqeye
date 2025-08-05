@@ -52,7 +52,7 @@ pub fn extract_parquet_file_metadata(file_name: &str) -> Result<ParquetFileMetad
             *codec_counts.entry(codec_name).or_insert(0) += 1;
 
             for enc in col.encodings() {
-                encodings_seen.insert(format!("{:?}", enc));
+                encodings_seen.insert(format!("{enc:?}"));
             }
         }
     }
@@ -64,7 +64,7 @@ pub fn extract_parquet_file_metadata(file_name: &str) -> Result<ParquetFileMetad
     };
 
     let mut codec_vec: Vec<String> = codec_counts.iter()
-        .map(|(c, n)| format!("{}({})", c, n))
+        .map(|(c, n)| format!("{c}({n})"))
         .collect();
     codec_vec.sort();
 

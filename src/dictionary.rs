@@ -55,10 +55,10 @@ pub fn extract_dictionary_values(reader: &SerializedFileReader<File>, col_idx: u
                                     // If not valid UTF-8, show as hex
                                     let hex = string_data.iter()
                                         .take(8)
-                                        .map(|b| format!("{:02X}", b))
+                                        .map(|b| format!("{b:02X}"))
                                         .collect::<Vec<_>>()
                                         .join("");
-                                    dictionary_values.push(format!("0x{}", hex));
+                                    dictionary_values.push(format!("0x{hex}"));
                                 }
                             }
                             offset += length;
@@ -150,7 +150,7 @@ pub fn extract_dictionary_values(reader: &SerializedFileReader<File>, col_idx: u
                                     dictionary_values.push(datetime.format("%Y-%m-%d %H:%M:%S%.9f UTC").to_string());
                                 } else {
                                     // Fallback: show raw values
-                                    dictionary_values.push(format!("INT96(nanos={}, julian_day={})", nanos, julian_day));
+                                    dictionary_values.push(format!("INT96(nanos={nanos}, julian_day={julian_day})"));
                                 }
                             }
                         }
@@ -170,7 +170,7 @@ pub fn extract_dictionary_values(reader: &SerializedFileReader<File>, col_idx: u
                                     buffer_slice[offset + 3],
                                 ];
                                 let value = f32::from_le_bytes(bytes);
-                                dictionary_values.push(format!("{:.6}", value));
+                                dictionary_values.push(format!("{value:.6}"));
                             }
                         }
                     }
@@ -193,7 +193,7 @@ pub fn extract_dictionary_values(reader: &SerializedFileReader<File>, col_idx: u
                                     buffer_slice[offset + 7],
                                 ];
                                 let value = f64::from_le_bytes(bytes);
-                                dictionary_values.push(format!("{:.6}", value));
+                                dictionary_values.push(format!("{value:.6}"));
                             }
                         }
                     }
@@ -202,10 +202,10 @@ pub fn extract_dictionary_values(reader: &SerializedFileReader<File>, col_idx: u
                         let hex_preview = page_buffer
                             .iter()
                             .take(32)
-                            .map(|b| format!("{:02X}", b))
+                            .map(|b| format!("{b:02X}"))
                             .collect::<Vec<_>>()
                             .join(" ");
-                        dictionary_values.push(format!("Binary({}): {}", physical_type, hex_preview));
+                        dictionary_values.push(format!("Binary({physical_type}): {hex_preview}"));
                     }
                 }
                 

@@ -1,6 +1,7 @@
 use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::basic::{PageType, Encoding};
+use ratatui::layout::Position;
 use ratatui::widgets::{Axis, Chart, Dataset};
 use std::fs::File;
 use ratatui::{
@@ -129,7 +130,7 @@ impl Widget for RowGroupPageStats {
             .enumerate()
             .map(|(i, page)| {
                 Row::new(vec![
-                    Cell::from(format!("{}", i)),
+                    Cell::from(i.to_string()),
                     Cell::from(page.page_type),
                     Cell::from(human_readable_bytes(page.size as u64)),
                     Cell::from(commas(page.rows as u64)),
@@ -161,7 +162,7 @@ impl RowGroupColumnMetadata {
                 has_stats: column_chunk.statistics().is_some(),
                 has_dictionary_page: column_chunk.dictionary_page_offset().is_some(),
                 has_bloom_filter: column_chunk.bloom_filter_offset().is_some(),
-                has_page_encoding_stats: column_chunk.page_encoding_stats().is_some() && column_chunk.page_encoding_stats().unwrap().len() > 0,
+                has_page_encoding_stats: column_chunk.page_encoding_stats().is_some() && !column_chunk.page_encoding_stats().unwrap().is_empty(),
             },
             column_path: column_chunk.column_descr().path().string(),
             total_compressed_size: column_chunk.compressed_size(),
@@ -180,8 +181,8 @@ impl RowGroupStats {
         RowGroupStats {
             row_group_idx: row_group_idx + 1,
             rows: row_group.num_rows(),
-            compressed_size: compressed_size,
-            uncompressed_size: uncompressed_size,
+            compressed_size,
+            uncompressed_size,
             compression_ratio: format!("{:.2}x", (uncompressed_size as f64 / compressed_size as f64))
         }
     }
@@ -234,9 +235,10 @@ impl RowGroupStats {
                 for (i, ch) in value.chars().enumerate() {
                     let x = value_x + i as u16;
                     if x < inner.x + inner.width {
-                        buf.get_mut(x, value_y)
-                            .set_symbol(&ch.to_string())
-                            .set_style(ratatui::style::Style::default().fg(Color::LightMagenta).bold());
+                        if let Some(cell) = buf.cell_mut(Position::new(x, value_y)) {
+                            cell.set_symbol(&ch.to_string())
+                                .set_style(ratatui::style::Style::default().fg(Color::LightMagenta).bold());
+                        }
                     }
                 }
             }
@@ -248,11 +250,11 @@ impl Widget for RowGroupColumnMetadata {
     fn render(self, area: Rect, buf: &mut Buffer) {
 
         let kv_pairs = vec![
-            ("File Offset", format!("{}", self.file_offset)),
-            ("Compressed Size", format!("{}", human_readable_bytes(self.total_compressed_size as u64))),
-            ("Uncompressed Size", format!("{}", human_readable_bytes(self.total_uncompressed_size as u64))),
+            ("File Offset", self.file_offset.to_string()),
+            ("Compressed Size", human_readable_bytes(self.total_compressed_size as u64)),
+            ("Uncompressed Size", human_readable_bytes(self.total_uncompressed_size as u64)),
             ("Compression Ratio", format!("{:.2}x", (self.total_uncompressed_size as f64 / self.total_compressed_size as f64))),
-            ("Compression Type", format!("{}", self.compression_type)),
+            ("Compression Type", self.compression_type.to_string()),
         ];
 
         let rows: Vec<Row> = kv_pairs
@@ -310,9 +312,9 @@ impl Widget for RowGroupColumnMetadata {
 impl RowGroupColumnMetadata {
     fn render_stat_block(&self, title: &str, has_stat: bool, area: Rect, buf: &mut Buffer) {
         let (symbol, color) = if has_stat {
-            (format!("✓ {}", title), Color::Green)
+            (format!("✓ {title}"), Color::Green)
         } else {
-            (format!("✗ {}", title), Color::Red)
+            (format!("✗ {title}"), Color::Red)
         };
 
         let block = Block::bordered()
@@ -329,9 +331,10 @@ impl RowGroupColumnMetadata {
             let symbol_y = inner.y + inner.height / 2;
             
             if symbol_x < inner.x + inner.width && symbol_y < inner.y + inner.height {
-                buf.get_mut(symbol_x, symbol_y)
-                    .set_symbol(symbol.as_str())
-                    .set_style(ratatui::style::Style::default().fg(color).bold());
+                if let Some(cell) = buf.cell_mut(Position::new(symbol_x, symbol_y)) {
+                    cell.set_symbol(symbol.as_str())
+                        .set_style(ratatui::style::Style::default().fg(color).bold());
+                }
             }
         }
     }
@@ -345,7 +348,7 @@ pub fn calculate_row_group_stats(file_path: &str) -> Result<Vec<RowGroupStats>, 
     Ok(row_group_stats)
 }
 
-pub fn render_row_group_charts(row_group_stats: &Vec<RowGroupStats>, area: Rect, buf: &mut Buffer) {
+pub fn render_row_group_charts(row_group_stats: &[RowGroupStats], area: Rect, buf: &mut Buffer) {
     // Split the area into two charts vertically
     let chart_areas = Layout::vertical([
         Constraint::Fill(1),
@@ -360,7 +363,7 @@ pub fn render_row_group_charts(row_group_stats: &Vec<RowGroupStats>, area: Rect,
     render_compression_ratio_chart(row_group_stats, chart_areas[2], buf);
 }
 
-fn render_size_comparison_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect, buf: &mut Buffer) {
+fn render_size_comparison_chart(row_group_stats: &[RowGroupStats], area: Rect, buf: &mut Buffer) {
     // Prepare data: (row_group_index, size) pairs
     let compressed_data: Vec<(f64, f64)> = row_group_stats
         .iter()
@@ -412,7 +415,7 @@ fn render_size_comparison_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect
             } else if value >= 1_000.0 {
                 format!("{:.1}K", value / 1_024.0)
             } else {
-                format!("{:.0}", value)
+                format!("{value:.0}")
             }
         })
         .collect();
@@ -428,7 +431,7 @@ fn render_size_comparison_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::White))
-                .bounds([0.0, max_row_group])
+                .bounds([0.0, max_row_group + 1.0])
                 .labels(x_labels)
         )
         .y_axis(
@@ -441,7 +444,7 @@ fn render_size_comparison_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect
     chart.render(area, buf);
 }
 
-fn render_compression_ratio_chart(row_group_stats: &Vec<RowGroupStats>, area: Rect, buf: &mut Buffer) {
+fn render_compression_ratio_chart(row_group_stats: &[RowGroupStats], area: Rect, buf: &mut Buffer) {
     // Prepare compression ratio data: (row_group_index, compression_ratio)
     let ratio_data: Vec<(f64, f64)> = row_group_stats
         .iter()

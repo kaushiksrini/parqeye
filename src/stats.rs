@@ -70,18 +70,18 @@ fn decode_value(bytes: &[u8], physical: PhysicalType) -> String {
         }
         PhysicalType::FLOAT if bytes.len() == 4 => {
             let v = f32::from_le_bytes(bytes.try_into().unwrap());
-            format!("{:.4}", v)
+            format!("{v:.4}")
         }
         PhysicalType::DOUBLE if bytes.len() == 8 => {
             let v = f64::from_le_bytes(bytes.try_into().unwrap());
-            format!("{:.4}", v)
+            format!("{v:.4}")
         }
         PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
             match std::str::from_utf8(bytes) {
                 Ok(s) => s.to_string(),
-                Err(_) => bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(""),
+                Err(_) => bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(""),
             }
         }
-        _ => bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(""),
+        _ => bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(""),
     }
 }
