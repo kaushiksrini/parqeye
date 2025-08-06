@@ -1,9 +1,4 @@
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Color,
-    widgets::Widget,
-};
+use ratatui::{buffer::Buffer, layout::Rect, style::Color, widgets::Widget};
 
 pub struct ScrollbarComponent {
     pub orientation: ScrollbarOrientation,
@@ -89,7 +84,7 @@ impl Widget for ScrollbarComponent {
                 if area.width < 1 || area.height < 2 {
                     return;
                 }
-                
+
                 let track_length = area.height as usize;
                 let (thumb_size, thumb_position) = self.calculate_thumb_info(track_length);
 
@@ -114,7 +109,7 @@ impl Widget for ScrollbarComponent {
                 if area.width < 2 || area.height < 1 {
                     return;
                 }
-                
+
                 let track_length = area.width as usize;
                 let (thumb_size, thumb_position) = self.calculate_thumb_info(track_length);
 
@@ -137,4 +132,4 @@ impl Widget for ScrollbarComponent {
             }
         }
     }
-} 
+}

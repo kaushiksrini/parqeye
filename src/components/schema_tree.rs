@@ -1,3 +1,4 @@
+use crate::schema::SchemaColumnType;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -6,7 +7,6 @@ use ratatui::{
     text::Line,
     widgets::{Block, List, ListItem, Widget},
 };
-use crate::schema::SchemaColumnType;
 
 pub struct SchemaTreeComponent {
     pub schema_columns: Vec<SchemaColumnType>,
@@ -47,7 +47,13 @@ impl SchemaTreeComponent {
         self
     }
 
-    pub fn with_colors(mut self, root: Color, primitive: Color, group: Color, selected: Color) -> Self {
+    pub fn with_colors(
+        mut self,
+        root: Color,
+        primitive: Color,
+        group: Color,
+        selected: Color,
+    ) -> Self {
         self.root_color = root;
         self.primitive_color = primitive;
         self.group_color = group;
@@ -68,32 +74,31 @@ impl SchemaTreeComponent {
 
 impl Widget for SchemaTreeComponent {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let items: Vec<ListItem> = self.schema_columns
+        let items: Vec<ListItem> = self
+            .schema_columns
             .iter()
             .enumerate()
-            .map(|(idx, line)| {
-                match line {
-                    SchemaColumnType::Root { display: ref d, .. } => {
-                        ListItem::new(d.clone()).fg(self.root_color)
-                    }
-                    SchemaColumnType::Primitive { display: ref d, .. } => {
-                        let mut item = ListItem::new(d.clone()).fg(self.primitive_color);
-                        if let Some(selected_index) = self.selected_index {
-                            if idx == selected_index {
-                                item = item.fg(self.selected_color).bold();
-                            }
+            .map(|(idx, line)| match line {
+                SchemaColumnType::Root { display: ref d, .. } => {
+                    ListItem::new(d.clone()).fg(self.root_color)
+                }
+                SchemaColumnType::Primitive { display: ref d, .. } => {
+                    let mut item = ListItem::new(d.clone()).fg(self.primitive_color);
+                    if let Some(selected_index) = self.selected_index {
+                        if idx == selected_index {
+                            item = item.fg(self.selected_color).bold();
                         }
-                        item
                     }
-                    SchemaColumnType::Group { display: ref d, .. } => {
-                        let mut item = ListItem::new(d.clone()).fg(self.group_color);
-                        if let Some(selected_index) = self.selected_index {
-                            if idx == selected_index {
-                                item = item.fg(self.selected_color).bold();
-                            }
+                    item
+                }
+                SchemaColumnType::Group { display: ref d, .. } => {
+                    let mut item = ListItem::new(d.clone()).fg(self.group_color);
+                    if let Some(selected_index) = self.selected_index {
+                        if idx == selected_index {
+                            item = item.fg(self.selected_color).bold();
                         }
-                        item
                     }
+                    item
                 }
             })
             .collect();
@@ -108,11 +113,11 @@ impl Widget for SchemaTreeComponent {
                 ", ".into(),
                 "Group".fg(self.group_color),
             ];
-            
+
             if self.selected_index.is_some() {
                 legend_vec.extend(vec![", ".into(), "Selected".bold().fg(self.selected_color)]);
             }
-            
+
             let legend = Line::from(legend_vec);
             block = block.title_bottom(legend.centered());
         }

@@ -1,10 +1,10 @@
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::DefaultTerminal;
 use std::collections::HashMap;
 use std::io;
-use ratatui::DefaultTerminal;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 
-use crate::schema::{SchemaColumnType, ColumnType};
 use crate::column_chunk::RowGroupStats;
+use crate::schema::{ColumnType, SchemaColumnType};
 
 #[derive(Default)]
 pub struct App {
@@ -30,20 +30,26 @@ impl App {
         self.column_selected = None;
         self.scroll_offset = 0;
         self.row_group_selected = 0;
-        
+
         let (schema_columns, schema_map) = crate::schema::build_schema_tree_lines(path)
-            .map_err(| e| io::Error::other(e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         self.schema_columns = schema_columns;
         self.schema_map = schema_map;
 
-        for (idx, c) in self.schema_columns.iter().filter(|c| matches!(c, SchemaColumnType::Primitive { .. })).enumerate() {
+        for (idx, c) in self
+            .schema_columns
+            .iter()
+            .filter(|c| matches!(c, SchemaColumnType::Primitive { .. }))
+            .enumerate()
+        {
             if let SchemaColumnType::Primitive { name, .. } = c {
                 self.primitive_columns_idx.insert(name.clone(), idx);
             }
         }
 
         // calculate row group stats
-        self.row_group_stats = crate::column_chunk::calculate_row_group_stats(path).map_err(|e| io::Error::other(e.to_string()))?;
+        self.row_group_stats = crate::column_chunk::calculate_row_group_stats(path)
+            .map_err(|e| io::Error::other(e.to_string()))?;
 
         while !self.exit {
             terminal.draw(|frame| crate::ui::render_app(self, frame))?;
@@ -52,7 +58,7 @@ impl App {
         Ok(())
     }
 
-    fn handle_events(&mut self, ) -> io::Result<()> {
+    fn handle_events(&mut self) -> io::Result<()> {
         match event::read()? {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 self.handle_key_event(key_event)
@@ -162,15 +168,15 @@ impl App {
                 self.scroll_offset = 0;
                 return;
             }
-            
+
             // For items after root, adjust scroll considering root is always visible
             let effective_viewport = viewport_height.saturating_sub(1); // Account for root
             let relative_selected = selected_idx - 1; // Relative to items after root
-            
+
             // Check if selection is above visible area (scroll up to show it)
             if relative_selected < self.scroll_offset {
                 self.scroll_offset = relative_selected;
-            } 
+            }
             // Check if selection is at or below the last visible position (scroll down)
             // Only scroll when selection goes beyond the last visible item
             else if relative_selected > self.scroll_offset + effective_viewport - 1 {
@@ -179,32 +185,35 @@ impl App {
         }
     }
 
-    pub fn get_visible_schema_items(&self, viewport_height: usize) -> (Vec<&SchemaColumnType>, usize) {
+    pub fn get_visible_schema_items(
+        &self,
+        viewport_height: usize,
+    ) -> (Vec<&SchemaColumnType>, usize) {
         if self.schema_columns.is_empty() {
             return (vec![], 0);
         }
 
         let mut visible_items = Vec::new();
-        
+
         // Always include the first item (root) at the top
         visible_items.push(&self.schema_columns[0]);
-        
+
         if viewport_height <= 1 {
             return (visible_items, 0);
         }
-        
+
         // Calculate how many more items we can show after the root
         let remaining_viewport = viewport_height - 1;
-        
+
         // Start from item 1 (after root) and apply scroll offset
         let start_idx = 1 + self.scroll_offset;
         let end_idx = (start_idx + remaining_viewport).min(self.schema_columns.len());
-        
+
         // Add the scrolled items after the root
         for i in start_idx..end_idx {
             visible_items.push(&self.schema_columns[i]);
         }
-        
+
         (visible_items, 0) // Return 0 as offset since we're managing display differently
     }
 
@@ -215,28 +224,29 @@ impl App {
 
     pub fn get_scrollbar_info(&self, viewport_height: usize) -> (usize, usize, usize) {
         let total_items = self.schema_columns.len();
-        
+
         if total_items <= viewport_height {
             return (viewport_height, 0, viewport_height);
         }
-        
+
         // Calculate scrollbar based on scrollable content (excluding always-visible root)
         let scrollable_items = total_items.saturating_sub(1);
         let effective_viewport = viewport_height.saturating_sub(1);
-        
-        let scrollbar_height = if scrollable_items == 0 { 
-            viewport_height 
-        } else { 
-            (effective_viewport * viewport_height) / scrollable_items 
-        }.max(1);
-        
+
+        let scrollbar_height = if scrollable_items == 0 {
+            viewport_height
+        } else {
+            (effective_viewport * viewport_height) / scrollable_items
+        }
+        .max(1);
+
         let max_scroll_offset = scrollable_items.saturating_sub(effective_viewport);
         let scrollbar_position = if max_scroll_offset == 0 {
             0
         } else {
             (self.scroll_offset * (viewport_height - scrollbar_height)) / max_scroll_offset
         };
-        
+
         (scrollbar_height, scrollbar_position, viewport_height)
     }
 }

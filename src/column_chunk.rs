@@ -1,14 +1,20 @@
+use parquet::basic::{Encoding, PageType};
 use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
 use parquet::file::reader::{FileReader, SerializedFileReader};
-use parquet::basic::{PageType, Encoding};
 use ratatui::layout::Position;
 use ratatui::widgets::{Axis, Chart, Dataset};
-use std::fs::File;
 use ratatui::{
-    buffer::Buffer, layout::{Constraint, Layout, Rect}, prelude::Color, style::{Style, Stylize}, symbols::{border, self}, text::Line, widgets::{Block, Borders, Cell, Row, Table, Widget}
+    buffer::Buffer,
+    layout::{Constraint, Layout, Rect},
+    prelude::Color,
+    style::{Style, Stylize},
+    symbols::{self, border},
+    text::Line,
+    widgets::{Block, Borders, Cell, Row, Table, Widget},
 };
+use std::fs::File;
 
-use crate::utils::{human_readable_bytes, commas};
+use crate::utils::{commas, human_readable_bytes};
 
 pub struct RowGroupPageStats {
     pub page_stats: Vec<PageStats>,
@@ -25,7 +31,7 @@ pub struct HasStats {
     pub has_stats: bool,
     pub has_dictionary_page: bool,
     pub has_bloom_filter: bool,
-    pub has_page_encoding_stats: bool
+    pub has_page_encoding_stats: bool,
 }
 
 pub struct RowGroupStats {
@@ -48,17 +54,23 @@ pub struct RowGroupColumnMetadata {
 }
 
 impl RowGroupPageStats {
-    pub fn from_parquet_file(file_path: &str, _metadata: &ParquetMetaData, row_group_idx: usize, column_idx: usize) -> Result<Self, Box<dyn std::error::Error>> {
-        // TODO: make async and reduce file opening to once. 
+    pub fn from_parquet_file(
+        file_path: &str,
+        _metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        // TODO: make async and reduce file opening to once.
         let file = File::open(file_path)?;
         let parquet_reader = SerializedFileReader::new(file)?;
-        
+
         // Get the page reader for this column
-        let mut page_reader = parquet_reader.get_row_group(row_group_idx)?
+        let mut page_reader = parquet_reader
+            .get_row_group(row_group_idx)?
             .get_column_page_reader(column_idx)?;
-        
+
         let mut page_stats = Vec::new();
-        
+
         // Iterate through pages and collect stats
         while let Ok(page) = page_reader.get_next_page() {
             if let Some(page) = page {
@@ -68,7 +80,7 @@ impl RowGroupPageStats {
                     PageType::DICTIONARY_PAGE => "Dictionary Page".to_string(),
                     PageType::DATA_PAGE_V2 => "Data Page V2".to_string(),
                 };
-                
+
                 let encoding = match page.encoding() {
                     Encoding::PLAIN => "Plain".to_string(),
                     Encoding::PLAIN_DICTIONARY => "Plain Dictionary".to_string(),
@@ -80,7 +92,7 @@ impl RowGroupPageStats {
                     Encoding::BYTE_STREAM_SPLIT => "Byte Stream Split".to_string(),
                     _ => format!("{:?}", page.encoding()), // Handle any other encoding types
                 };
-                
+
                 page_stats.push(PageStats {
                     page_type,
                     size: page.buffer().len(),
@@ -91,7 +103,7 @@ impl RowGroupPageStats {
                 break;
             }
         }
-        
+
         Ok(RowGroupPageStats { page_stats })
     }
 }
@@ -102,19 +114,19 @@ impl Widget for RowGroupPageStats {
             .title(" Page Information ")
             .border_style(ratatui::style::Style::default().fg(Color::Rgb(128, 128, 128)))
             .title_style(ratatui::style::Style::default().fg(Color::LightBlue).bold());
-        
+
         let inner_area = block.inner(area);
         block.render(area, buf);
-        
+
         if self.page_stats.is_empty() {
             let no_data = Table::new(
                 vec![Row::new(vec![Cell::from("No page data available")])],
-                vec![Constraint::Fill(1)]
+                vec![Constraint::Fill(1)],
             );
             no_data.render(inner_area, buf);
             return;
         }
-        
+
         // Create table headers
         let header = Row::new(vec![
             Cell::from("#").bold().fg(Color::Blue),
@@ -123,9 +135,10 @@ impl Widget for RowGroupPageStats {
             Cell::from("Rows").bold().fg(Color::Blue),
             Cell::from("Encoding").bold().fg(Color::Blue),
         ]);
-        
+
         // Create table rows from page stats
-        let rows: Vec<Row> = self.page_stats
+        let rows: Vec<Row> = self
+            .page_stats
             .into_iter()
             .enumerate()
             .map(|(i, page)| {
@@ -138,23 +151,31 @@ impl Widget for RowGroupPageStats {
                 ])
             })
             .collect();
-        
-        let table = Table::new(rows, vec![
-            Constraint::Max(3),  // Page Number
-            Constraint::Fill(1),  // Page Type
-            Constraint::Fill(1),  // Size
-            Constraint::Fill(1),  // Rows
-            Constraint::Fill(1),     // Encoding
-        ])
+
+        let table = Table::new(
+            rows,
+            vec![
+                Constraint::Max(3),  // Page Number
+                Constraint::Fill(1), // Page Type
+                Constraint::Fill(1), // Size
+                Constraint::Fill(1), // Rows
+                Constraint::Fill(1), // Encoding
+            ],
+        )
         .header(header);
-        
+
         table.render(inner_area, buf);
     }
 }
 
 impl RowGroupColumnMetadata {
-    pub fn from_parquet_file(metadata: &ParquetMetaData, row_group_idx: usize, column_idx: usize) -> Self {
-        let column_chunk: &ColumnChunkMetaData = metadata.row_group(row_group_idx).column(column_idx);
+    pub fn from_parquet_file(
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Self {
+        let column_chunk: &ColumnChunkMetaData =
+            metadata.row_group(row_group_idx).column(column_idx);
 
         RowGroupColumnMetadata {
             file_offset: column_chunk.file_offset(),
@@ -162,7 +183,8 @@ impl RowGroupColumnMetadata {
                 has_stats: column_chunk.statistics().is_some(),
                 has_dictionary_page: column_chunk.dictionary_page_offset().is_some(),
                 has_bloom_filter: column_chunk.bloom_filter_offset().is_some(),
-                has_page_encoding_stats: column_chunk.page_encoding_stats().is_some() && !column_chunk.page_encoding_stats().unwrap().is_empty(),
+                has_page_encoding_stats: column_chunk.page_encoding_stats().is_some()
+                    && !column_chunk.page_encoding_stats().unwrap().is_empty(),
             },
             column_path: column_chunk.column_descr().path().string(),
             total_compressed_size: column_chunk.compressed_size(),
@@ -175,43 +197,68 @@ impl RowGroupColumnMetadata {
 impl RowGroupStats {
     pub fn from_parquet_file(metadata: &ParquetMetaData, row_group_idx: usize) -> Self {
         let row_group: &RowGroupMetaData = metadata.row_group(row_group_idx);
-        let compressed_size = row_group.columns().iter().map(|c| c.compressed_size()).sum();
-        let uncompressed_size = row_group.columns().iter().map(|c| c.uncompressed_size()).sum();
-        
+        let compressed_size = row_group
+            .columns()
+            .iter()
+            .map(|c| c.compressed_size())
+            .sum();
+        let uncompressed_size = row_group
+            .columns()
+            .iter()
+            .map(|c| c.uncompressed_size())
+            .sum();
+
         RowGroupStats {
             row_group_idx: row_group_idx + 1,
             rows: row_group.num_rows(),
             compressed_size,
             uncompressed_size,
-            compression_ratio: format!("{:.2}x", (uncompressed_size as f64 / compressed_size as f64))
+            compression_ratio: format!(
+                "{:.2}x",
+                (uncompressed_size as f64 / compressed_size as f64)
+            ),
         }
     }
 }
 
 impl Widget for RowGroupStats {
     fn render(self, area: Rect, buf: &mut Buffer) {
-
-        let title = vec![" Row Group: ".into(), format!("{}", self.row_group_idx).light_blue().bold(), " ".into()];
+        let title = vec![
+            " Row Group: ".into(),
+            format!("{}", self.row_group_idx).light_blue().bold(),
+            " ".into(),
+        ];
         let block = Block::bordered()
             .title(Line::from(title).centered())
             .borders(Borders::TOP)
             .border_set(border::DOUBLE);
-        
+
         let inner_area: Rect = block.inner(area);
         block.render(area, buf);
-        
+
         // Create 1x4 horizontal grid for stats
         let horizontal_areas = Layout::horizontal([
             Constraint::Percentage(25),
             Constraint::Percentage(25),
             Constraint::Percentage(25),
             Constraint::Percentage(25),
-        ]).split(inner_area);
-        
+        ])
+        .split(inner_area);
+
         // Render each stat block
         self.render_stat_block("Rows", &commas(self.rows as u64), horizontal_areas[0], buf);
-        self.render_stat_block("Compressed", &human_readable_bytes(self.compressed_size as u64), horizontal_areas[1], buf);
-        self.render_stat_block("Uncompressed", &human_readable_bytes(self.uncompressed_size as u64), horizontal_areas[2], buf);
+        self.render_stat_block(
+            "Compressed",
+            &human_readable_bytes(self.compressed_size as u64),
+            horizontal_areas[1],
+            buf,
+        );
+        self.render_stat_block(
+            "Uncompressed",
+            &human_readable_bytes(self.uncompressed_size as u64),
+            horizontal_areas[2],
+            buf,
+        );
         self.render_stat_block("Ratio", &self.compression_ratio, horizontal_areas[3], buf);
     }
 }
@@ -230,14 +277,17 @@ impl RowGroupStats {
         if inner.width > 0 && inner.height > 0 {
             let value_x = inner.x + (inner.width.saturating_sub(value.len() as u16)) / 2;
             let value_y = inner.y + inner.height / 2;
-            
+
             if value_y < inner.y + inner.height {
                 for (i, ch) in value.chars().enumerate() {
                     let x = value_x + i as u16;
                     if x < inner.x + inner.width {
                         if let Some(cell) = buf.cell_mut(Position::new(x, value_y)) {
-                            cell.set_symbol(&ch.to_string())
-                                .set_style(ratatui::style::Style::default().fg(Color::LightMagenta).bold());
+                            cell.set_symbol(&ch.to_string()).set_style(
+                                ratatui::style::Style::default()
+                                    .fg(Color::LightMagenta)
+                                    .bold(),
+                            );
                         }
                     }
                 }
@@ -248,43 +298,54 @@ impl RowGroupStats {
 
 impl Widget for RowGroupColumnMetadata {
     fn render(self, area: Rect, buf: &mut Buffer) {
-
         let kv_pairs = vec![
             ("File Offset", self.file_offset.to_string()),
-            ("Compressed Size", human_readable_bytes(self.total_compressed_size as u64)),
-            ("Uncompressed Size", human_readable_bytes(self.total_uncompressed_size as u64)),
-            ("Compression Ratio", format!("{:.2}x", (self.total_uncompressed_size as f64 / self.total_compressed_size as f64))),
+            (
+                "Compressed Size",
+                human_readable_bytes(self.total_compressed_size as u64),
+            ),
+            (
+                "Uncompressed Size",
+                human_readable_bytes(self.total_uncompressed_size as u64),
+            ),
+            (
+                "Compression Ratio",
+                format!(
+                    "{:.2}x",
+                    (self.total_uncompressed_size as f64 / self.total_compressed_size as f64)
+                ),
+            ),
             ("Compression Type", self.compression_type.to_string()),
         ];
 
         let rows: Vec<Row> = kv_pairs
-        .into_iter()
-        .map(|(k, v)| {
-            Row::new(vec![
-                Cell::from(k).bold().fg(Color::Blue),
-                Cell::from(v),
-            ])
-        })
-        .collect();
+            .into_iter()
+            .map(|(k, v)| Row::new(vec![Cell::from(k).bold().fg(Color::Blue), Cell::from(v)]))
+            .collect();
 
         let table = Table::new(rows, vec![Constraint::Length(18), Constraint::Length(20)]);
-        
-        let title = vec![" Column: ".into(), self.column_path.clone().yellow().bold(), " ".into()];
+
+        let title = vec![
+            " Column: ".into(),
+            self.column_path.clone().yellow().bold(),
+            " ".into(),
+        ];
 
         // First, create and render the outer block
         let block = Block::bordered()
             .title(Line::from(title).centered())
             .borders(Borders::TOP)
             .border_set(border::DOUBLE);
-        
+
         let inner_area = block.inner(area);
         block.render(area, buf);
 
         // Now subdivide the inner area for stats, table
         let [stats_area, table_area] = Layout::vertical([
-            Constraint::Length(3),   // Stats area (1x4 grid)
-            Constraint::Fill(2),     // Table area (column metadata)
-        ]).areas(inner_area);
+            Constraint::Length(3), // Stats area (1x4 grid)
+            Constraint::Fill(2),   // Table area (column metadata)
+        ])
+        .areas(inner_area);
 
         // Render the table in the table area
         table.render(table_area, buf);
@@ -295,7 +356,8 @@ impl Widget for RowGroupColumnMetadata {
             Constraint::Percentage(25),
             Constraint::Percentage(25),
             Constraint::Percentage(25),
-        ]).split(stats_area);
+        ])
+        .split(stats_area);
         let first: Rect = horizontal_areas[0];
         let second = horizontal_areas[1];
         let third = horizontal_areas[2];
@@ -305,7 +367,12 @@ impl Widget for RowGroupColumnMetadata {
         self.render_stat_block("Statistics", self.has_stats.has_stats, first, buf);
         self.render_stat_block("Dict Page", self.has_stats.has_dictionary_page, second, buf);
         self.render_stat_block("Bloom Filter", self.has_stats.has_bloom_filter, third, buf);
-        self.render_stat_block("Page Stats", self.has_stats.has_page_encoding_stats, fourth, buf);
+        self.render_stat_block(
+            "Page Stats",
+            self.has_stats.has_page_encoding_stats,
+            fourth,
+            buf,
+        );
     }
 }
 
@@ -329,7 +396,7 @@ impl RowGroupColumnMetadata {
         if inner.width > 0 && inner.height > 0 {
             let symbol_x = inner.x + inner.width / 2;
             let symbol_y = inner.y + inner.height / 2;
-            
+
             if symbol_x < inner.x + inner.width && symbol_y < inner.y + inner.height {
                 if let Some(cell) = buf.cell_mut(Position::new(symbol_x, symbol_y)) {
                     cell.set_symbol(symbol.as_str())
@@ -340,11 +407,18 @@ impl RowGroupColumnMetadata {
     }
 }
 
-pub fn calculate_row_group_stats(file_path: &str) -> Result<Vec<RowGroupStats>, Box<dyn std::error::Error>> {
+pub fn calculate_row_group_stats(
+    file_path: &str,
+) -> Result<Vec<RowGroupStats>, Box<dyn std::error::Error>> {
     let file = File::open(file_path)?;
     let parquet_reader = SerializedFileReader::new(file)?;
     let metadata = parquet_reader.metadata();
-    let row_group_stats = metadata.row_groups().iter().enumerate().map(|(i, _)| RowGroupStats::from_parquet_file(metadata, i )).collect();
+    let row_group_stats = metadata
+        .row_groups()
+        .iter()
+        .enumerate()
+        .map(|(i, _)| RowGroupStats::from_parquet_file(metadata, i))
+        .collect();
     Ok(row_group_stats)
 }
 
@@ -354,11 +428,12 @@ pub fn render_row_group_charts(row_group_stats: &[RowGroupStats], area: Rect, bu
         Constraint::Fill(1),
         Constraint::Length(1),
         Constraint::Fill(1),
-    ]).split(area);
+    ])
+    .split(area);
 
     // Chart 1: Scatter plot of compressed vs uncompressed sizes per row group
     render_size_comparison_chart(row_group_stats, chart_areas[0], buf);
-    
+
     // Chart 2: Compression ratios vs row group number
     render_compression_ratio_chart(row_group_stats, chart_areas[2], buf);
 }
@@ -369,17 +444,23 @@ fn render_size_comparison_chart(row_group_stats: &[RowGroupStats], area: Rect, b
         .iter()
         .map(|rg| (rg.row_group_idx as f64, rg.compressed_size as f64))
         .collect();
-    
+
     let uncompressed_data: Vec<(f64, f64)> = row_group_stats
         .iter()
         .map(|rg| (rg.row_group_idx as f64, rg.uncompressed_size as f64))
         .collect();
 
     // Find max size for y-axis bounds
-    let max_compressed = compressed_data.iter().map(|(_, size)| *size).fold(0.0, f64::max);
-    let max_uncompressed = uncompressed_data.iter().map(|(_, size)| *size).fold(0.0, f64::max);
+    let max_compressed = compressed_data
+        .iter()
+        .map(|(_, size)| *size)
+        .fold(0.0, f64::max);
+    let max_uncompressed = uncompressed_data
+        .iter()
+        .map(|(_, size)| *size)
+        .fold(0.0, f64::max);
     let max_size = max_compressed.max(max_uncompressed);
-    
+
     // Find x-axis bounds
     let max_row_group = row_group_stats.len() as f64 - 1.0;
 
@@ -404,7 +485,7 @@ fn render_size_comparison_chart(row_group_stats: &[RowGroupStats], area: Rect, b
         format!("{}", (row_group_stats.len() * 3 / 4).max(1)),
         format!("{}", row_group_stats.len()),
     ];
-    
+
     // Create y-axis labels (size values)
     let y_step = (max_size * 1.5) / 4.0; // 4 intervals
     let y_labels: Vec<String> = (0..4)
@@ -419,26 +500,31 @@ fn render_size_comparison_chart(row_group_stats: &[RowGroupStats], area: Rect, b
             }
         })
         .collect();
-    
-    let title = vec!["Compressed".light_blue().bold(), " vs ".into(), "Uncompressed".light_red().bold(), " sizes (B)".into()];
+
+    let title = vec![
+        "Compressed".light_blue().bold(),
+        " vs ".into(),
+        "Uncompressed".light_red().bold(),
+        " sizes (B)".into(),
+    ];
     let chart = Chart::new(datasets)
         .block(
             Block::default()
-                .title(Line::from(title).centered())  // Y-axis label at top
-                .title_bottom("Row Group".dark_gray())  // X-axis label at bottom
-                .borders(Borders::NONE)
+                .title(Line::from(title).centered()) // Y-axis label at top
+                .title_bottom("Row Group".dark_gray()) // X-axis label at bottom
+                .borders(Borders::NONE),
         )
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::White))
                 .bounds([0.0, max_row_group + 1.0])
-                .labels(x_labels)
+                .labels(x_labels),
         )
         .y_axis(
             Axis::default()
                 .style(Style::default().fg(Color::White))
                 .bounds([0.0, max_size * 1.5])
-                .labels(y_labels)
+                .labels(y_labels),
         );
 
     chart.render(area, buf);
@@ -459,16 +545,17 @@ fn render_compression_ratio_chart(row_group_stats: &[RowGroupStats], area: Rect,
         .collect();
 
     // Find bounds
-    let max_ratio = ratio_data.iter().map(|(_, ratio)| *ratio).fold(0.0, f64::max);
+    let max_ratio = ratio_data
+        .iter()
+        .map(|(_, ratio)| *ratio)
+        .fold(0.0, f64::max);
     let max_row_group = row_group_stats.len() as f64 - 1.0;
 
-    let datasets = vec![
-        Dataset::default()
-            .name("Compression Ratio")
-            .marker(symbols::Marker::Dot)
-            .style(Style::default().fg(Color::Yellow))
-            .data(&ratio_data),
-    ];
+    let datasets = vec![Dataset::default()
+        .name("Compression Ratio")
+        .marker(symbols::Marker::Dot)
+        .style(Style::default().fg(Color::Yellow))
+        .data(&ratio_data)];
 
     // Create x-axis labels (row group indices)
     let x_labels = vec![
@@ -478,7 +565,7 @@ fn render_compression_ratio_chart(row_group_stats: &[RowGroupStats], area: Rect,
         format!("{}", (row_group_stats.len() * 3 / 4).max(1)),
         format!("{}", row_group_stats.len()),
     ];
-    
+
     // Create y-axis labels (compression ratio values)
     let y_range = max_ratio * 1.1 - 1.0;
     let y_step = y_range / 4.0; // 4 intervals
@@ -493,21 +580,21 @@ fn render_compression_ratio_chart(row_group_stats: &[RowGroupStats], area: Rect,
     let chart = Chart::new(datasets)
         .block(
             Block::default()
-                .title("Compression Ratio".yellow())  // Y-axis label at top
+                .title("Compression Ratio".yellow()) // Y-axis label at top
                 // .title_bottom("Row Group".dark_gray())   // X-axis label at bottom
-                .borders(Borders::NONE)
+                .borders(Borders::NONE),
         )
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::White))
                 .bounds([0.0, max_row_group])
-                .labels(x_labels)
+                .labels(x_labels),
         )
         .y_axis(
             Axis::default()
                 .style(Style::default().fg(Color::White))
                 .bounds([1.0, max_ratio * 1.1])
-                .labels(y_labels)
+                .labels(y_labels),
         );
 
     chart.render(area, buf);

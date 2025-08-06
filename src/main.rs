@@ -1,12 +1,13 @@
-use std::io;
 use datatools::app::App;
+use std::io;
 
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(author, version, about="Tool to visualize parquet files")]
+#[command(author, version, about = "Tool to visualize parquet files")]
 pub struct Opts {
-    #[command(subcommand)] pub cmd: Command,
+    #[command(subcommand)]
+    pub cmd: Command,
 }
 
 #[derive(Subcommand)]

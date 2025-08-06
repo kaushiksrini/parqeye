@@ -11,7 +11,11 @@ pub struct ColumnStats {
     pub total_uncompressed_size: u64,
 }
 
-pub fn aggregate_column_stats(md: &ParquetMetaData, col_idx: usize, physical: PhysicalType) -> ColumnStats {
+pub fn aggregate_column_stats(
+    md: &ParquetMetaData,
+    col_idx: usize,
+    physical: PhysicalType,
+) -> ColumnStats {
     let mut min_bytes: Option<Vec<u8>> = None;
     let mut max_bytes: Option<Vec<u8>> = None;
     let mut nulls: u64 = 0;
@@ -79,9 +83,17 @@ fn decode_value(bytes: &[u8], physical: PhysicalType) -> String {
         PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
             match std::str::from_utf8(bytes) {
                 Ok(s) => s.to_string(),
-                Err(_) => bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(""),
+                Err(_) => bytes
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(""),
             }
         }
-        _ => bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(""),
+        _ => bytes
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(""),
     }
 }

@@ -1,8 +1,8 @@
+use parquet::file::metadata::ParquetMetaData;
+use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
-use parquet::file::reader::{FileReader, SerializedFileReader};
-use parquet::file::metadata::ParquetMetaData;
 
 #[derive(Debug)]
 pub struct ParquetFileMetadata {
@@ -20,13 +20,17 @@ pub struct ParquetFileMetadata {
     pub avg_row_size: u64,
 }
 
-pub fn extract_file_metadata(file_name: &str) -> Result<ParquetMetaData, Box<dyn std::error::Error>> {
+pub fn extract_file_metadata(
+    file_name: &str,
+) -> Result<ParquetMetaData, Box<dyn std::error::Error>> {
     let file = File::open(Path::new(file_name))?;
     let reader: SerializedFileReader<File> = SerializedFileReader::new(file)?;
     Ok(reader.metadata().clone())
 }
 
-pub fn extract_parquet_file_metadata(file_name: &str) -> Result<ParquetFileMetadata, Box<dyn std::error::Error>> {
+pub fn extract_parquet_file_metadata(
+    file_name: &str,
+) -> Result<ParquetFileMetadata, Box<dyn std::error::Error>> {
     let md: ParquetMetaData = extract_file_metadata(file_name)?;
 
     let binding = md.file_metadata().created_by();
@@ -57,13 +61,14 @@ pub fn extract_parquet_file_metadata(file_name: &str) -> Result<ParquetFileMetad
         }
     }
 
-    let compression_ratio = if compressed_size > 0 { 
-        raw_size as f64 / compressed_size as f64 
-    } else { 
-        0.0 
+    let compression_ratio = if compressed_size > 0 {
+        raw_size as f64 / compressed_size as f64
+    } else {
+        0.0
     };
 
-    let mut codec_vec: Vec<String> = codec_counts.iter()
+    let mut codec_vec: Vec<String> = codec_counts
+        .iter()
         .map(|(c, n)| format!("{c}({n})"))
         .collect();
     codec_vec.sort();
@@ -72,15 +77,15 @@ pub fn extract_parquet_file_metadata(file_name: &str) -> Result<ParquetFileMetad
     encodings.sort();
     let encodings_summary = encodings.join(", ");
 
-    let avg_row_size = if total_rows > 0 { 
-        raw_size as f64 / total_rows as f64 
-    } else { 
-        0.0 
+    let avg_row_size = if total_rows > 0 {
+        raw_size as f64 / total_rows as f64
+    } else {
+        0.0
     };
 
     // Extract just the file name without the path
     let file_name = file_name.split("/").last().unwrap().to_string();
-    
+
     Ok(ParquetFileMetadata {
         file_name,
         format_version: version.to_string(),

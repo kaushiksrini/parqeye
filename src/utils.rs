@@ -41,7 +41,7 @@ pub fn truncate_str(s: &str, max: usize) -> String {
 
 pub fn commas(n: u64) -> String {
     let s = n.to_string();
-    let mut out = String::with_capacity(s.len() + s.len()/3);
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, ch) in s.chars().rev().enumerate() {
         if i > 0 && i % 3 == 0 {
             out.push(',');

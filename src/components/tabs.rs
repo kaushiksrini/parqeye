@@ -1,8 +1,8 @@
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Tabs};
-use ratatui::widgets::Widget;
-use ratatui::layout::Rect;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::text::Line;
+use ratatui::widgets::Widget;
+use ratatui::widgets::{Block, Tabs};
 
 pub struct TabsComponent<'a> {
     pub tabs: Vec<&'a str>,
@@ -12,7 +12,11 @@ pub struct TabsComponent<'a> {
 
 impl<'a> TabsComponent<'a> {
     pub fn new(tabs: Vec<&'a str>) -> Self {
-        Self { tabs, active_tab: 0, title: "Tabs".to_string() }
+        Self {
+            tabs,
+            active_tab: 0,
+            title: "Tabs".to_string(),
+        }
     }
 
     pub fn with_selected_tab(mut self, active_tab: usize) -> Self {
@@ -28,12 +32,11 @@ impl<'a> TabsComponent<'a> {
 
 impl<'a> Widget for TabsComponent<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-
         let tab_titles: Vec<Line> = self.tabs.iter().map(|t| Line::from(*t)).collect();
         let tabs_widget = Tabs::new(tab_titles)
             .select(self.active_tab)
             .block(Block::bordered().title(self.title));
-        
+
         tabs_widget.render(area, buf);
     }
-}   
+}
