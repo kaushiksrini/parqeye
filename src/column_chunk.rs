@@ -438,16 +438,52 @@ pub fn render_row_group_charts(row_group_stats: &[RowGroupStats], area: Rect, bu
     render_compression_ratio_chart(row_group_stats, chart_areas[2], buf);
 }
 
+fn normalized_x_positions(num_points: usize) -> Vec<f64> {
+    if num_points == 0 {
+        return vec![];
+    }
+    (0..num_points)
+        .map(|i| (i as f64 + 0.5) / num_points as f64)
+        .collect()
+}
+
+fn make_x_labels(num_points: usize) -> Vec<String> {
+    // Return up to 4 labels, including min (1) and max (num_points)
+    match num_points {
+        0 => vec![],
+        1 => vec!["1".to_string()],
+        2 => vec!["1".to_string(), "2".to_string()],
+        3 => vec!["1".to_string(), "2".to_string(), "3".to_string()],
+        n => {
+            let a: usize = 1usize;
+            let d = n;
+            let b = 1 + (n.saturating_sub(1)) / 3; // ~33%
+            let c = 1 + (n.saturating_sub(1)) * 2 / 3; // ~66%
+            let mut labels = vec![a, b, c, d];
+            labels.sort_unstable();
+            labels.dedup();
+            labels.into_iter().map(|v| v.to_string()).collect()
+        }
+    }
+}
+
 fn render_size_comparison_chart(row_group_stats: &[RowGroupStats], area: Rect, buf: &mut Buffer) {
-    // Prepare data: (row_group_index, size) pairs
+    let n = row_group_stats.len();
+    if n == 0 {
+        return;
+    }
+    // Prepare data with normalized, centered x positions in [0, 1]
+    let x_positions = normalized_x_positions(n);
     let compressed_data: Vec<(f64, f64)> = row_group_stats
         .iter()
-        .map(|rg| (rg.row_group_idx as f64, rg.compressed_size as f64))
+        .enumerate()
+        .map(|(i, rg)| (x_positions[i], rg.compressed_size as f64))
         .collect();
 
     let uncompressed_data: Vec<(f64, f64)> = row_group_stats
         .iter()
-        .map(|rg| (rg.row_group_idx as f64, rg.uncompressed_size as f64))
+        .enumerate()
+        .map(|(i, rg)| (x_positions[i], rg.uncompressed_size as f64))
         .collect();
 
     // Find max size for y-axis bounds
@@ -461,8 +497,7 @@ fn render_size_comparison_chart(row_group_stats: &[RowGroupStats], area: Rect, b
         .fold(0.0, f64::max);
     let max_size = max_compressed.max(max_uncompressed);
 
-    // Find x-axis bounds
-    let max_row_group = row_group_stats.len() as f64 - 1.0;
+    // X-axis will be normalized [0, 1]
 
     let datasets = vec![
         Dataset::default()
@@ -477,14 +512,8 @@ fn render_size_comparison_chart(row_group_stats: &[RowGroupStats], area: Rect, b
             .data(&uncompressed_data),
     ];
 
-    // Create x-axis labels (row group indices)
-    let x_labels = vec![
-        "0".to_string(),
-        format!("{}", (row_group_stats.len() / 4).max(1)),
-        format!("{}", (row_group_stats.len() / 2).max(1)),
-        format!("{}", (row_group_stats.len() * 3 / 4).max(1)),
-        format!("{}", row_group_stats.len()),
-    ];
+    // Create x-axis labels (row group indices) with a max of 4 labels including min and max
+    let x_labels = make_x_labels(n);
 
     // Create y-axis labels (size values)
     let y_step = (max_size * 1.5) / 4.0; // 4 intervals
@@ -517,7 +546,7 @@ fn render_size_comparison_chart(row_group_stats: &[RowGroupStats], area: Rect, b
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::White))
-                .bounds([0.0, max_row_group + 1.0])
+                .bounds([0.0, 1.0])
                 .labels(x_labels),
         )
         .y_axis(
@@ -531,16 +560,22 @@ fn render_size_comparison_chart(row_group_stats: &[RowGroupStats], area: Rect, b
 }
 
 fn render_compression_ratio_chart(row_group_stats: &[RowGroupStats], area: Rect, buf: &mut Buffer) {
-    // Prepare compression ratio data: (row_group_index, compression_ratio)
+    let n = row_group_stats.len();
+    if n == 0 {
+        return;
+    }
+    // Prepare compression ratio data with normalized, centered x positions in [0, 1]
+    let x_positions = normalized_x_positions(n);
     let ratio_data: Vec<(f64, f64)> = row_group_stats
         .iter()
-        .map(|rg| {
+        .enumerate()
+        .map(|(i, rg)| {
             let ratio = if rg.compressed_size > 0 {
                 rg.uncompressed_size as f64 / rg.compressed_size as f64
             } else {
                 1.0
             };
-            (rg.row_group_idx as f64, ratio)
+            (x_positions[i], ratio)
         })
         .collect();
 
@@ -549,7 +584,7 @@ fn render_compression_ratio_chart(row_group_stats: &[RowGroupStats], area: Rect,
         .iter()
         .map(|(_, ratio)| *ratio)
         .fold(0.0, f64::max);
-    let max_row_group = row_group_stats.len() as f64 - 1.0;
+    // X-axis will be normalized [0, 1]
 
     let datasets = vec![Dataset::default()
         .name("Compression Ratio")
@@ -557,14 +592,8 @@ fn render_compression_ratio_chart(row_group_stats: &[RowGroupStats], area: Rect,
         .style(Style::default().fg(Color::Yellow))
         .data(&ratio_data)];
 
-    // Create x-axis labels (row group indices)
-    let x_labels = vec![
-        "0".to_string(),
-        format!("{}", (row_group_stats.len() / 4).max(1)),
-        format!("{}", (row_group_stats.len() / 2).max(1)),
-        format!("{}", (row_group_stats.len() * 3 / 4).max(1)),
-        format!("{}", row_group_stats.len()),
-    ];
+    // Create x-axis labels (row group indices) with a max of 4 labels including min and max
+    let x_labels = make_x_labels(n);
 
     // Create y-axis labels (compression ratio values)
     let y_range = max_ratio * 1.1 - 1.0;
@@ -587,7 +616,7 @@ fn render_compression_ratio_chart(row_group_stats: &[RowGroupStats], area: Rect,
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::White))
-                .bounds([0.0, max_row_group])
+                .bounds([0.0, 1.0])
                 .labels(x_labels),
         )
         .y_axis(
