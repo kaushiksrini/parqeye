@@ -7,5 +7,6 @@ pub mod schema;
 pub mod stats;
 pub mod ui;
 pub mod utils;
+pub mod visualize;
 
 pub use app::App;

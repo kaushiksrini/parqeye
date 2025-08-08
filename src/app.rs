@@ -20,16 +20,19 @@ pub struct App {
     pub schema_tree_height: usize,
     pub row_group_stats: Vec<RowGroupStats>,
     pub primitive_columns_idx: HashMap<String, usize>,
+    // Visualize tab state
+    pub visualize_col_offset: usize,
 }
 
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal, path: &str) -> io::Result<()> {
         self.file_name = path.to_string();
-        self.tabs = vec!["Schema", "Row Groups"];
+        self.tabs = vec!["Schema", "Row Groups", "Visualize"];
         self.active_tab = 0;
         self.column_selected = None;
         self.scroll_offset = 0;
         self.row_group_selected = 0;
+        self.visualize_col_offset = 0;
 
         let (schema_columns, schema_map) = crate::schema::build_schema_tree_lines(path)
             .map_err(|e| io::Error::other(e.to_string()))?;
@@ -117,21 +120,43 @@ impl App {
                 }
             }
             KeyCode::PageDown => {
-                if self.active_tab == 0 {
-                    self.scroll_down(2);
+                match self.active_tab {
+                    0 => self.scroll_down(2),
+                    2 => self.scroll_down(25),
+                    _ => {}
                 }
             }
             KeyCode::PageUp => {
-                if self.active_tab == 0 {
-                    self.scroll_up(2);
+                match self.active_tab {
+                    0 => self.scroll_up(2),
+                    2 => self.scroll_up(25),
+                    _ => {}
                 }
             }
             KeyCode::Char('j') => {
-                self.row_group_selected += 1;
+                if self.active_tab == 1 {
+                    self.row_group_selected += 1;
+                } else if self.active_tab == 2 {
+                    self.scroll_down(1);
+                }
             }
             KeyCode::Char('k') => {
-                if self.row_group_selected > 0 {
-                    self.row_group_selected -= 1;
+                if self.active_tab == 1 {
+                    if self.row_group_selected > 0 {
+                        self.row_group_selected -= 1;
+                    }
+                } else if self.active_tab == 2 {
+                    self.scroll_up(1);
+                }
+            }
+            KeyCode::Char('h') => {
+                if self.active_tab == 2 {
+                    self.visualize_col_offset = self.visualize_col_offset.saturating_sub(2);
+                }
+            }
+            KeyCode::Char('l') => {
+                if self.active_tab == 2 {
+                    self.visualize_col_offset = self.visualize_col_offset.saturating_add(2);
                 }
             }
             _ => {}

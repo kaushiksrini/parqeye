@@ -84,6 +84,7 @@ fn render_right_panel(app: &mut App, area: Rect, buf: &mut Buffer) {
     match app.active_tab {
         0 => render_schema_tab(app, content_area, buf),
         1 => render_row_groups_tab(app, content_area, buf),
+        2 => render_visualize_tab(app, content_area, buf),
         _ => {
             let placeholder = Paragraph::new("Coming soon...").block(
                 Block::bordered()
@@ -270,6 +271,128 @@ fn render_schema_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
 
         render_column_stats(app, stats_area, buf);
     }
+}
+
+fn render_visualize_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
+    use crate::visualize::load_rows_window;
+
+    // Determine how many rows to show based on area height (leave 3 for header/borders)
+    let viewport_rows: usize = area.height.saturating_sub(3) as usize;
+    let page_size = viewport_rows.max(1);
+
+    // Load a window of rows lazily
+    let (rows, column_names) = match load_rows_window(&app.file_name, app.scroll_offset, page_size)
+    {
+        Ok(v) => v,
+        Err(_) => {
+            let p = Paragraph::new("Error loading rows").block(
+                Block::bordered()
+                    .title(Line::from("Visualize").centered())
+                    .border_set(border::ROUNDED),
+            );
+            p.render(area, buf);
+            return;
+        }
+    };
+
+    // Determine total columns and names
+    let total_cols: usize = if !column_names.is_empty() {
+        column_names.len()
+    } else {
+        rows.first().map(|r| r.len()).unwrap_or(0)
+    };
+    let all_col_names: Vec<String> = if !column_names.is_empty() {
+        column_names.clone()
+    } else {
+        (0..total_cols).map(|i| format!("c{i}")).collect()
+    };
+
+    // Compute per-column minimum widths (column name length + 2)
+    let col_min_widths: Vec<u16> = all_col_names
+        .iter()
+        .map(|name| (name.len() as u16).saturating_add(2))
+        .collect();
+
+    // Available content width (approx) and spacing per column
+    let available_width: u16 = area.width.saturating_sub(2); // leave margin for borders
+    let spacing: u16 = 1; // matches .column_spacing(1)
+    let rownum_width: u16 = 6;
+
+    // Determine how many columns can fit if the window is anchored at the end (for clamping)
+    let mut required: u16 = rownum_width;
+    let mut cols_fit_from_end: usize = 0;
+    for w in col_min_widths.iter().rev() {
+        let next = required.saturating_add(spacing).saturating_add(*w);
+        if next <= available_width {
+            required = next;
+            cols_fit_from_end += 1;
+        } else {
+            break;
+        }
+    }
+    let last_valid_start: usize = total_cols.saturating_sub(cols_fit_from_end.max(1));
+
+    // Clamp requested start so the right-most can reach the last column
+    let start_col: usize = app.visualize_col_offset.min(last_valid_start);
+
+    // Compute visible window [start_col, end_col) based on available width
+    let mut end_col: usize = start_col;
+    required = rownum_width;
+    for i in start_col..total_cols {
+        let w = col_min_widths[i];
+        let next = required.saturating_add(spacing).saturating_add(w);
+        if next <= available_width {
+            required = next;
+            end_col = i + 1;
+        } else {
+            break;
+        }
+    }
+    if end_col == start_col && start_col < total_cols {
+        end_col = start_col + 1; // ensure we show at least one column
+    }
+
+    // Build header for the visible window
+    let mut header_titles: Vec<String> = Vec::with_capacity(1 + (end_col - start_col));
+    header_titles.push("#".to_string());
+    header_titles.extend(all_col_names[start_col..end_col].iter().cloned());
+    let header_cells = header_titles
+        .into_iter()
+        .map(|h| Cell::from(h).bold().fg(Color::Red));
+
+    let mut table_rows: Vec<Row> = Vec::with_capacity(rows.len());
+    for (i, r) in rows.iter().enumerate() {
+        let mut row_columns: Vec<Cell> = Vec::with_capacity(r.len());
+        for (_, col) in r.get_column_iter() {
+            row_columns.push(Cell::from(col.to_json_value().to_string()));
+        }
+        let row_num = (app.scroll_offset + i + 1).to_string();
+        let slice_end = end_col.min(row_columns.len());
+        let slice_start = start_col.min(slice_end);
+        let visible_cells_iter = row_columns
+            .into_iter()
+            .skip(slice_start)
+            .take(slice_end.saturating_sub(slice_start));
+        let cells: Vec<Cell> = std::iter::once(Cell::from(row_num)).chain(visible_cells_iter).collect();
+        table_rows.push(Row::new(cells));
+    }
+
+    let mut col_constraints: Vec<Constraint> = Vec::with_capacity(1 + (end_col - start_col));
+    col_constraints.push(Constraint::Length(rownum_width)); // row number
+    for i in start_col..end_col {
+        col_constraints.push(Constraint::Min(col_min_widths[i]));
+    }
+
+    let table_widget = Table::new(table_rows, col_constraints)
+        .header(Row::new(header_cells))
+        .column_spacing(1)
+        .block(
+            Block::bordered()
+                .title(Line::from("Visualize").centered())
+                .border_set(border::ROUNDED),
+        );
+
+    table_widget.render(area, buf);
 }
 
 fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer) {
