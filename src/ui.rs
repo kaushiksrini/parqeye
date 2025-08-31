@@ -15,7 +15,7 @@ use ratatui::{
 use std::path::Path;
 use std::{fs::File, io};
 
-use crate::components::{MetadataComponent, ScrollbarComponent, TabsComponent};
+use crate::{components::{MetadataComponent, ScrollbarComponent, TabsComponent}, row_groups::RowGroupsTab, schema::SchemaTab, visualize::VisualizeTab};
 use crate::dictionary::extract_dictionary_values;
 use crate::schema::{ColumnType, SchemaColumnType};
 use crate::stats::aggregate_column_stats;
@@ -74,29 +74,29 @@ fn render_right_panel(app: &mut App, area: Rect, buf: &mut Buffer) {
         Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
     // Build Tabs widget
-    let tabs_widget = TabsComponent::new(app.tabs.clone())
+    let tabs_widget = TabsComponent::new(app.active_tab.all_tab_names())
         .with_selected_tab(app.active_tab)
         .with_title("Tabs".to_string());
 
     tabs_widget.render(tabs_bar_area, buf);
 
     // Render content based on selected tab
-    match app.active_tab {
-        0 => render_schema_tab(app, content_area, buf),
-        1 => render_row_groups_tab(app, content_area, buf),
-        2 => render_visualize_tab(app, content_area, buf),
-        _ => {
-            let placeholder = Paragraph::new("Coming soon...").block(
-                Block::bordered()
-                    .title(Line::from(app.tabs[app.active_tab]).centered())
-                    .border_set(border::ROUNDED),
-            );
-            placeholder.render(content_area, buf);
-        }
+
+    let id = app.active_tab;
+    if let Some(mut tab) = app.tabs.remove(&id) {
+        tab.render(app, area, buf); // now we can borrow &mut self safely
+        app.tabs.insert(id, tab);
+    } else {
+        let placeholder = Paragraph::new("Coming soon...").block(
+            Block::bordered()
+                .title(Line::from("Missing tab").centered())
+                .border_set(border::ROUNDED),
+        );
+        placeholder.render(content_area, buf);
     }
 }
 
-fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
+pub fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer, tab: &RowGroupsTab) {
     let tree_width = app
         .schema_columns
         .iter()
@@ -113,7 +113,7 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
         Layout::horizontal([Constraint::Length(tree_width as u16), Constraint::Fill(1)])
             .areas(area);
 
-    render_schema_tree(app, tree_area, buf);
+    render_schema_tree(app, tree_area, buf, tab.column_selected, tab.scroll_offset);
 
     // now we render the stats for that row group
     // split the area into 3 parts with majority in the center and others in the side
@@ -144,7 +144,7 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     let [row_group_column_metadata_area, row_group_page_stats_area] =
         Layout::vertical([Constraint::Length(10), Constraint::Fill(1)]).areas(column_stats_area);
 
-    if let Some(column_selected) = app.column_selected {
+    if let Some(column_selected) = tab.column_selected {
         match app.schema_columns[column_selected] {
             SchemaColumnType::Primitive { ref name, .. } => {
                 let column_idx = app.primitive_columns_idx[name];
@@ -166,7 +166,7 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
             _ => {
                 let placeholder = Paragraph::new("Coming soon...").block(
                     Block::bordered()
-                        .title(Line::from(app.tabs[app.active_tab]).centered())
+                        .title(Line::from(app.active_tab.name()).centered())
                         .border_set(border::ROUNDED),
                 );
                 placeholder.render(column_stats_area, buf);
@@ -175,7 +175,7 @@ fn render_row_groups_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn render_schema_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
+pub fn render_schema_tab(app: &mut App, area: Rect, buf: &mut Buffer, tab: &SchemaTab) {
     let tree_width = app
         .schema_columns
         .iter()
@@ -208,7 +208,7 @@ fn render_schema_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
                         Cell::from(info.codec.clone()),
                         Cell::from(info.encoding.clone()),
                     ]);
-                    if let Some(selected_index) = app.column_selected {
+                    if let Some(selected_index) = tab.column_selected {
                         if idx == selected_index {
                             row = row.style(Style::default().bg(Color::DarkGray));
                         }
@@ -221,7 +221,7 @@ fn render_schema_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
                         Cell::from("group".green()),
                     ]);
 
-                    if let Some(selected_index) = app.column_selected {
+                    if let Some(selected_index) = tab.column_selected {
                         if idx == selected_index {
                             row = row.style(Style::default().bg(Color::DarkGray));
                         }
@@ -233,7 +233,7 @@ fn render_schema_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 
     // Layout: tree | separator | table | separator | stats (if selected)
-    let areas = if app.column_selected.is_some() {
+    let areas = if tab.column_selected.is_some() {
         let [tree_area, table_stats_area] =
             Layout::horizontal([Constraint::Length(tree_width as u16), Constraint::Fill(1)])
                 .areas(area);
@@ -259,21 +259,21 @@ fn render_schema_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
         (tree_area, table_area, None, None)
     };
 
-    render_schema_tree(app, areas.0, buf);
+    render_schema_tree(app, areas.0, buf, tab.column_selected, tab.scroll_offset);
 
     // Render columns table
-    render_columns_table(table_rows, areas.1, buf, app);
+    render_columns_table(table_rows, areas.1, buf, app, tab);
 
     // Render stats if column is selected
     if let (Some(sep_area), Some(stats_area)) = (areas.2, areas.3) {
         let table_stats_sep_block = Block::default().borders(Borders::RIGHT).fg(Color::Yellow);
         table_stats_sep_block.render(sep_area, buf);
 
-        render_column_stats(app, stats_area, buf);
+        render_column_stats(app, stats_area, buf, tab);
     }
 }
 
-fn render_visualize_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
+pub fn render_visualize_tab(app: &mut App, area: Rect, buf: &mut Buffer, tab: &VisualizeTab) {
     use crate::visualize::load_rows_window;
 
     // Determine how many rows to show based on area height (leave 3 for header/borders)
@@ -281,7 +281,7 @@ fn render_visualize_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     let page_size = viewport_rows.max(1);
 
     // Load a window of rows lazily
-    let (rows, column_names) = match load_rows_window(&app.file_name, app.scroll_offset, page_size)
+    let (rows, column_names) = match load_rows_window(&app.file_name, tab.row_offset, page_size)
     {
         Ok(v) => v,
         Err(_) => {
@@ -333,7 +333,7 @@ fn render_visualize_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     let last_valid_start: usize = total_cols.saturating_sub(cols_fit_from_end.max(1));
 
     // Clamp requested start so the right-most can reach the last column
-    let start_col: usize = app.visualize_col_offset.min(last_valid_start);
+    let start_col: usize = tab.col_offset.min(last_valid_start);
 
     // Compute visible window [start_col, end_col) based on available width
     let mut end_col: usize = start_col;
@@ -366,7 +366,7 @@ fn render_visualize_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
         for (_, col) in r.get_column_iter() {
             row_columns.push(Cell::from(col.to_json_value().to_string()));
         }
-        let row_num = (app.scroll_offset + i + 1).to_string();
+        let row_num = (tab.row_offset + i + 1).to_string();
         let slice_end = end_col.min(row_columns.len());
         let slice_start = start_col.min(slice_end);
         let visible_cells_iter = row_columns
@@ -395,7 +395,7 @@ fn render_visualize_tab(app: &mut App, area: Rect, buf: &mut Buffer) {
     table_widget.render(area, buf);
 }
 
-fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer) {
+fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer, column_selected: Option<usize>, scroll_offset: usize) {
     // Calculate viewport height (subtract 2 for borders)
     let viewport_height = area.height.saturating_sub(2) as usize;
     app.set_schema_tree_height(viewport_height);
@@ -408,13 +408,13 @@ fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer) {
 
     let mut tree_vec = vec!["Leaf".blue(), ", ".into(), "Group".green()];
 
-    if app.column_selected.is_some() {
+    if column_selected.is_some() {
         tree_vec.extend(vec![", ".into(), "Selected".bold().yellow()]);
     }
     let tree_info = Line::from(tree_vec);
 
     // Get visible items based on scroll
-    let (visible_items, _) = app.get_visible_schema_items(viewport_height);
+    let (visible_items, _) = app.get_visible_schema_items(viewport_height, scroll_offset);
 
     let list_items: Vec<ListItem> = visible_items
         .iter()
@@ -426,13 +426,14 @@ fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer) {
                 0
             } else {
                 // Other items start from index 1 + scroll_offset
-                visible_idx + app.scroll_offset
+                // visible_idx + app.scroll_offset
+                visible_idx
             };
 
             match line {
                 SchemaColumnType::Root { display: ref d, .. } => {
                     let mut item = ListItem::new(d.clone()).dark_gray();
-                    if let Some(selected_index) = app.column_selected {
+                    if let Some(selected_index) = column_selected {
                         if actual_idx == selected_index {
                             item = item.fg(Color::Yellow).bold();
                         }
@@ -441,7 +442,7 @@ fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer) {
                 }
                 SchemaColumnType::Primitive { display: ref d, .. } => {
                     let mut item = ListItem::new(d.clone()).blue();
-                    if let Some(selected_index) = app.column_selected {
+                    if let Some(selected_index) = column_selected {
                         if actual_idx == selected_index {
                             item = item.fg(Color::Yellow).bold();
                         }
@@ -450,7 +451,7 @@ fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer) {
                 }
                 SchemaColumnType::Group { display: ref d, .. } => {
                     let mut item: ListItem<'_> = ListItem::new(d.clone()).green();
-                    if let Some(selected_index) = app.column_selected {
+                    if let Some(selected_index) = column_selected {
                         if actual_idx == selected_index {
                             item = item.fg(Color::Yellow).bold();
                         }
@@ -479,7 +480,8 @@ fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer) {
 
         // Clamp scroll offset to valid range for scrollbar calculation
         let max_scroll_offset = scrollable_items.saturating_sub(effective_viewport);
-        let clamped_scroll_offset = app.scroll_offset.min(max_scroll_offset);
+        // let clamped_scroll_offset = app.scroll_offset.min(max_scroll_offset);
+        let clamped_scroll_offset = 0;
 
         let scrollbar = ScrollbarComponent::vertical(
             scrollable_items,
@@ -497,7 +499,7 @@ fn render_schema_tree(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn render_columns_table(table_rows: Vec<Row>, area: Rect, buf: &mut Buffer, app: &App) {
+fn render_columns_table(table_rows: Vec<Row>, area: Rect, buf: &mut Buffer, app: &App, tab: &SchemaTab) {
     // Calculate viewport height for table (subtract 3 for borders and header)
     let viewport_height = area.height.saturating_sub(3) as usize;
 
@@ -513,7 +515,7 @@ fn render_columns_table(table_rows: Vec<Row>, area: Rect, buf: &mut Buffer, app:
     // Get visible rows based on scroll offset
     let visible_rows: Vec<Row> = table_rows
         .into_iter()
-        .skip(app.scroll_offset)
+        .skip(tab.scroll_offset)
         .take(viewport_height)
         .collect();
 
@@ -542,8 +544,8 @@ fn render_columns_table(table_rows: Vec<Row>, area: Rect, buf: &mut Buffer, app:
     table_widget.render(area, buf);
 }
 
-fn render_column_stats(app: &App, area: Rect, buf: &mut Buffer) {
-    if let Some(selected_idx) = app.column_selected {
+fn render_column_stats(app: &App, area: Rect, buf: &mut Buffer, tab: &SchemaTab) {
+    if let Some(selected_idx) = tab.column_selected {
         // Determine column index among leaf columns
         let mut leaf_counter: usize = 0;
         let mut selected_col_idx: Option<usize> = None;

@@ -1,3 +1,4 @@
+use crossterm::event::{KeyCode, KeyEvent};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::schema::types::Type;
 use parquet::{errors::ParquetError, file::metadata::ParquetMetaData, record::Row};
@@ -5,26 +6,63 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
+use crate::tab::Tab;
+use crate::ui::render_visualize_tab;
+
 #[derive(Debug, Clone)]
-pub struct VisualizeState {
+pub struct VisualizeTab {
     pub page_size: usize,
-    pub offset_row: usize,
     pub visible_rows: Vec<Row>,
     pub column_names: Vec<String>,
     pub last_loaded_offset: usize,
     pub last_loaded_page_size: usize,
+    
+    pub row_offset: usize,
+    pub col_offset: usize,
 }
 
-impl VisualizeState {
+impl VisualizeTab {
     pub fn new(page_size: usize) -> Self {
         Self {
             page_size,
-            offset_row: 0,
+            row_offset: 0,
+            col_offset: 0,
             visible_rows: Vec::new(),
             column_names: Vec::new(),
             last_loaded_offset: usize::MAX,
             last_loaded_page_size: usize::MAX,
         }
+    }
+}
+
+impl Tab for VisualizeTab {
+    fn on_focus(&mut self) {
+        self.col_offset = 0;
+        self.row_offset = 0;
+    }
+
+    fn on_event(&mut self, key_event: KeyEvent, _app: &mut crate::App) {
+        match key_event.code {
+            KeyCode::Char('j') => {
+                self.row_offset += 1;                
+            }
+            KeyCode::Char('k') => {
+                self.row_offset = self.row_offset.saturating_sub(1);
+            }
+            KeyCode::Char('h') => {
+                self.col_offset = self.col_offset.saturating_sub(2);
+            }
+            KeyCode::Char('l') => {
+                self.col_offset = self.col_offset.saturating_add(2);
+            }
+            _ => {
+
+            }
+        }
+    }
+    
+    fn render(&mut self, app: &mut crate::App, area: ratatui::prelude::Rect, buf: &mut ratatui::prelude::Buffer) {
+        render_visualize_tab(app, area, buf, self);
     }
 }
 
