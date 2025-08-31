@@ -50,3 +50,39 @@ pub fn commas(n: u64) -> String {
     }
     out.chars().rev().collect()
 }
+
+pub fn adjust_scroll_for_viewport(column_selected: Option<usize>, viewport_height: usize) -> usize {
+    let mut scroll_offset: usize = 0;
+    if let Some(selected_idx) = column_selected {
+        // If root (index 0) is selected, no scrolling needed
+        if selected_idx == 0 {
+            scroll_offset = 0;
+        }
+
+        // For items after root, adjust scroll considering root is always visible
+        let effective_viewport = viewport_height.saturating_sub(1); // Account for root
+        let relative_selected = selected_idx - 1; // Relative to items after root
+
+        // Check if selection is above visible area (scroll up to show it)
+        if relative_selected < scroll_offset {
+            scroll_offset = relative_selected;
+        }
+        // Check if selection is at or below the last visible position (scroll down)
+        // Only scroll when selection goes beyond the last visible item
+        else if relative_selected > scroll_offset + effective_viewport - 1 {
+            scroll_offset = relative_selected.saturating_sub(effective_viewport - 1);
+        }
+    }
+    
+    return  scroll_offset;
+}
+
+pub fn adjust_scroll_for_selection(column_selected: Option<usize>, schema_tree_height: usize) -> usize {
+    let mut scroll_offset: usize = 0;
+    if let Some(_selected_idx) = column_selected {
+        // Set the viewport height from the schema tree height
+        let viewport_height = schema_tree_height;
+        scroll_offset = adjust_scroll_for_viewport(column_selected, viewport_height);
+    }
+    return scroll_offset;
+}

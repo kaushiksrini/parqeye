@@ -1,9 +1,84 @@
+use crossterm::event::{KeyCode, KeyEvent};
 use parquet::basic::{LogicalType, TimeUnit};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::schema::types::Type as ParquetType;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
+
+use crate::tab::Tab;
+use crate::ui::render_schema_tab;
+use crate::utils::adjust_scroll_for_selection;
+
+pub struct SchemaTab {
+    pub row_offset: usize,
+    pub col_offset: usize,
+    pub scroll_offset: usize,
+
+    pub column_selected: Option<usize>,
+    pub schema_columns: Vec<SchemaColumnType>,
+}
+
+impl SchemaTab {
+    fn scroll_down(&mut self, amount: usize, app: &crate::App) {
+        // Max scroll should account for the fact that root is always visible
+        // So we can scroll through items 1 to end
+        let scrollable_items = app.schema_columns.len().saturating_sub(1);
+        self.scroll_offset = (self.scroll_offset + amount).min(scrollable_items);
+    }
+
+    fn scroll_up(&mut self, amount: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+    }
+}
+
+impl Tab for SchemaTab {
+    fn on_focus(&mut self) {
+        self.col_offset = 0;
+        self.row_offset = 0;
+        self.scroll_offset = 0;
+        self.column_selected = None;
+    }
+    
+    fn on_event(&mut self, key_event: KeyEvent, app: &mut crate::App) {
+        match key_event.code {
+            KeyCode::Down => {
+                let total_columns: usize = self.schema_columns.len();
+                if let Some(idx) = self.column_selected {
+                    if idx + 1 < total_columns {
+                        self.column_selected = Some(idx + 1);
+                    }
+                } else {
+                    self.column_selected = Some(1);
+                }
+                adjust_scroll_for_selection(self.column_selected, app.schema_tree_height);
+            } 
+            KeyCode::Up => {
+                let total_columns: usize = self.schema_columns.len();
+                if let Some(idx) = self.column_selected {
+                    if idx + 1 < total_columns {
+                        self.column_selected = Some(idx - 1);
+                    }
+                } else {
+                    self.column_selected = Some(1);
+                }
+                adjust_scroll_for_selection(self.column_selected, app.schema_tree_height);
+            }
+            KeyCode::PageDown => {
+                self.scroll_down(2, app);
+            }
+            KeyCode::PageUp => {
+                self.scroll_up(2);
+            }
+            _ => {}
+        }
+    }
+    
+    fn render(&mut self, app: &mut crate::App, area: ratatui::prelude::Rect, buf: &mut ratatui::prelude::Buffer) {
+        render_schema_tab(app, area, buf, self);
+    }
+    
+}
 
 #[derive(Debug, Clone)]
 pub struct ColumnSchemaInfo {
