@@ -5,6 +5,8 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::{Block, Tabs};
 
 pub enum TabType {
+    Visualize,
+    Metadata,
     Schema,
     RowGroups,
     Visualize,
@@ -13,6 +15,8 @@ pub enum TabType {
 impl std::fmt::Display for TabType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            TabType::Visualize => write!(f, "Visualize"),
+            TabType::Metadata => write!(f, "Metadata"),
             TabType::Schema => write!(f, "Schema"),
             TabType::RowGroups => write!(f, "Row Groups"),
             TabType::Visualize => write!(f, "Visualize"),
