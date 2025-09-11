@@ -75,7 +75,8 @@ impl<'a> SchemaTreeComponent<'a> {
 impl<'a> Widget for SchemaTreeComponent<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Create a mapping from primitive column index to schema tree index
-        let primitive_to_schema_map: Vec<usize> = self.schema_columns
+        let primitive_to_schema_map: Vec<usize> = self
+            .schema_columns
             .iter()
             .enumerate()
             .filter_map(|(idx, line)| matches!(line, SchemaInfo::Primitive { .. }).then_some(idx))
@@ -88,7 +89,9 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
             .map(|(idx, line)| {
                 let is_selected = if let Some(selected_primitive_idx) = self.selected_index {
                     // Convert primitive index to schema tree index
-                    if let Some(&schema_idx) = primitive_to_schema_map.get(selected_primitive_idx.saturating_sub(1)) {
+                    if let Some(&schema_idx) =
+                        primitive_to_schema_map.get(selected_primitive_idx.saturating_sub(1))
+                    {
                         idx == schema_idx
                     } else {
                         false

@@ -1,10 +1,30 @@
 use std::collections::HashSet;
 
-use parquet::basic::{LogicalType, TimeUnit};
+use parquet::basic::{LogicalType, TimeUnit, Type as PhysicalType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::Type as ParquetType;
+use ratatui::{
+    buffer::Buffer,
+    layout::{Constraint, Rect},
+    style::{Color, Stylize},
+    symbols::border,
+    text::Line,
+    widgets::{Block, Cell, Row, Table, Widget},
+};
+
+use crate::file::Renderable;
 
 #[derive(Debug, Clone)]
+pub struct ColumnStats {
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub nulls: u64,
+    pub distinct: Option<u64>,
+    pub total_compressed_size: u64,
+    pub total_uncompressed_size: u64,
+}
+
+#[derive(Clone)]
 pub struct ColumnSchemaInfo {
     pub name: String,
     pub repetition: String,
@@ -16,7 +36,7 @@ pub struct ColumnSchemaInfo {
     pub dictionary_values: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum SchemaInfo {
     Root {
         name: String,
@@ -26,6 +46,7 @@ pub enum SchemaInfo {
         name: String,
         display: String,
         info: ColumnSchemaInfo,
+        stats: ColumnStats,
     },
     Group {
         name: String,
@@ -82,10 +103,85 @@ impl FileSchema {
                 &mut lines,
                 &mut leaf_idx,
                 &summaries,
+                md,
             );
         }
 
         Ok(FileSchema { columns: lines })
+    }
+
+    pub fn column_size(&self) -> usize {
+        self.columns
+            .iter()
+            .filter(|c| matches!(c, SchemaInfo::Primitive { .. }))
+            .count()
+    }
+
+    pub fn tree_width(&self) -> usize {
+        self.columns
+            .iter()
+            .map(|c| match c {
+                SchemaInfo::Root { display, .. } => display.len(),
+                SchemaInfo::Primitive { display, .. } => display.len(),
+                SchemaInfo::Group { display, .. } => display.len(),
+            })
+            .max()
+            .unwrap_or(0)
+            .max(24) // max for the bottom of the chart
+    }
+
+    pub fn generate_table_rows(&self, selected_index: Option<usize>) -> Vec<Row> {
+        let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
+        
+        self.columns
+            .iter()
+            .filter_map(|col| {
+                if let SchemaInfo::Primitive {
+                    name, info, stats, ..
+                } = col
+                {
+                    let compression_ratio = if stats.total_uncompressed_size > 0 {
+                        format!(
+                            "{:.2}x",
+                            stats.total_uncompressed_size as f64
+                                / stats.total_compressed_size as f64
+                        )
+                    } else {
+                        "N/A".to_string()
+                    };
+
+                    let is_selected = selected_index == Some(primitive_index);
+                    
+                    let mut row = Row::new([
+                        Cell::from(info.repetition.clone()),
+                        Cell::from(info.physical.clone()),
+                        Cell::from(format_size(stats.total_compressed_size)),
+                        Cell::from(format_size(stats.total_uncompressed_size)),
+                        Cell::from(compression_ratio),
+                        Cell::from(info.encoding.clone()),
+                        Cell::from(info.codec.clone()),
+                        Cell::from(stats.min.clone().unwrap_or_else(|| "NULL".to_string())),
+                        Cell::from(stats.max.clone().unwrap_or_else(|| "NULL".to_string())),
+                        Cell::from(stats.nulls.to_string()),
+                    ]);
+                    
+                    if is_selected {
+                        row = row.style(ratatui::style::Style::default().bg(Color::Yellow).fg(Color::Black));
+                    }
+                    
+                    primitive_index += 1;
+                    Some(row)
+                } else if let SchemaInfo::Group { repetition, .. } = col {
+                    let row = Row::new(vec![
+                        Cell::from(repetition.clone().green()),
+                        Cell::from("group".green()),
+                    ]);
+                    Some(row)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
@@ -96,6 +192,7 @@ fn traverse(
     lines: &mut Vec<SchemaInfo>,
     leaf_idx: &mut usize,
     summaries: &Vec<(String, String)>,
+    md: &ParquetMetaData,
 ) {
     let connector: &'static str = if is_last { "└─" } else { "├─" };
     let line = format!("{}{} {}", prefix, connector, node.name());
@@ -109,6 +206,7 @@ fn traverse(
         };
 
         let (codec_sum, enc_sum) = &summaries[*leaf_idx];
+        let stats = aggregate_column_stats(md, *leaf_idx, node.get_physical_type());
         let info = ColumnSchemaInfo {
             name: node.name().to_string(),
             repetition: repetition.clone(),
@@ -123,6 +221,7 @@ fn traverse(
             name: node.name().to_string(),
             display: line,
             info,
+            stats,
         });
 
         *leaf_idx += 1;
@@ -146,8 +245,108 @@ fn traverse(
                 lines,
                 leaf_idx,
                 summaries,
+                md,
             );
         }
+    }
+}
+
+/// Efficiently aggregate column statistics across all row groups
+fn aggregate_column_stats(
+    md: &ParquetMetaData,
+    col_idx: usize,
+    physical: PhysicalType,
+) -> ColumnStats {
+    let (min_bytes, max_bytes, nulls, distinct, total_compressed_size, total_uncompressed_size) =
+        md.row_groups().iter().fold(
+            (
+                None::<Vec<u8>>,
+                None::<Vec<u8>>,
+                0u64,
+                None::<u64>,
+                0u64,
+                0u64,
+            ),
+            |(
+                mut min_bytes,
+                mut max_bytes,
+                mut nulls,
+                mut distinct,
+                mut compressed,
+                mut uncompressed,
+            ),
+             rg| {
+                let col_meta = rg.column(col_idx);
+                if let Some(stats) = col_meta.statistics() {
+                    nulls += stats.null_count_opt().unwrap_or(0);
+                    distinct =
+                        Some(distinct.unwrap_or(0) + stats.distinct_count_opt().unwrap_or(0));
+
+                    if let Some(min_b) = stats.min_bytes_opt() {
+                        if min_bytes.as_ref().map_or(true, |mb| min_b < &mb[..]) {
+                            min_bytes = Some(min_b.to_vec());
+                        }
+                    }
+                    if let Some(max_b) = stats.max_bytes_opt() {
+                        if max_bytes.as_ref().map_or(true, |mb| max_b > &mb[..]) {
+                            max_bytes = Some(max_b.to_vec());
+                        }
+                    }
+                }
+                compressed += col_meta.compressed_size() as u64;
+                uncompressed += col_meta.uncompressed_size() as u64;
+                (
+                    min_bytes,
+                    max_bytes,
+                    nulls,
+                    distinct,
+                    compressed,
+                    uncompressed,
+                )
+            },
+        );
+
+    ColumnStats {
+        min: min_bytes.as_deref().map(|b| decode_value(b, physical)),
+        max: max_bytes.as_deref().map(|b| decode_value(b, physical)),
+        nulls,
+        distinct,
+        total_compressed_size,
+        total_uncompressed_size,
+    }
+}
+
+/// Decode raw statistics bytes into a readable value based on the physical type
+fn decode_value(bytes: &[u8], physical: PhysicalType) -> String {
+    match physical {
+        PhysicalType::INT32 if bytes.len() == 4 => {
+            i32::from_le_bytes(bytes.try_into().unwrap()).to_string()
+        }
+        PhysicalType::INT64 if bytes.len() == 8 => {
+            i64::from_le_bytes(bytes.try_into().unwrap()).to_string()
+        }
+        PhysicalType::FLOAT if bytes.len() == 4 => {
+            format!("{:.4}", f32::from_le_bytes(bytes.try_into().unwrap()))
+        }
+        PhysicalType::DOUBLE if bytes.len() == 8 => {
+            format!("{:.4}", f64::from_le_bytes(bytes.try_into().unwrap()))
+        }
+        PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => std::str::from_utf8(bytes)
+            .map_or_else(
+                |_| {
+                    bytes
+                        .iter()
+                        .map(|b| format!("{b:02X}"))
+                        .collect::<Vec<_>>()
+                        .join("")
+                },
+                |s| s.to_string(),
+            ),
+        _ => bytes
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(""),
     }
 }
 
@@ -222,5 +421,24 @@ fn logical_type_to_string(logical_type: &LogicalType) -> String {
             ),
         },
         _ => format!("{:?}", logical_type),
+    }
+}
+
+
+/// Format byte size into human-readable format
+fn format_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+
+    if unit_index == 0 {
+        format!("{} {}", bytes, UNITS[unit_index])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_index])
     }
 }
