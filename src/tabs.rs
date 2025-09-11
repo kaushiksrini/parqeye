@@ -1,8 +1,8 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::Widget;
 use ratatui::widgets::Tabs;
+use ratatui::widgets::Widget;
 
 use crate::file::Renderable;
 
@@ -24,7 +24,6 @@ impl std::fmt::Display for TabType {
     }
 }
 
-
 pub struct TabManager {
     pub tabs: Vec<TabType>,
     pub active_tab: usize,
@@ -34,7 +33,12 @@ pub struct TabManager {
 impl TabManager {
     pub fn new() -> Self {
         Self {
-            tabs: vec![TabType::Visualize, TabType::Metadata, TabType::Schema, TabType::RowGroups],
+            tabs: vec![
+                TabType::Visualize,
+                TabType::Metadata,
+                TabType::Schema,
+                TabType::RowGroups,
+            ],
             active_tab: 0,
             title: "Tabs".to_string(),
         }
@@ -64,7 +68,11 @@ impl TabManager {
 
 impl Renderable for TabManager {
     fn render_content(&self, area: Rect, buf: &mut Buffer) {
-        let tab_titles: Vec<Line> = self.tabs.iter().map(|t| Line::from(t.to_string())).collect();
+        let tab_titles: Vec<Line> = self
+            .tabs
+            .iter()
+            .map(|t| Line::from(t.to_string()))
+            .collect();
         let tabs_widget: Tabs<'_> = Tabs::new(tab_titles)
             .select(self.active_tab)
             .padding(" ", " ")

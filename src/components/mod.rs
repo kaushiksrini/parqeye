@@ -1,9 +1,7 @@
-mod metadata;
-mod schema_tree;
-mod scrollbar;
-mod tabs;
+pub mod schema_tree;
+pub mod scrollbar;
+pub mod schema_table;
 
-pub use metadata::MetadataComponent;
 pub use schema_tree::SchemaTreeComponent;
 pub use scrollbar::ScrollbarComponent;
-pub use tabs::TabsComponent;
+pub use schema_table::FileSchemaTable;
