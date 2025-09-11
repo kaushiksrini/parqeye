@@ -34,4 +34,8 @@ impl ParquetCtx {
             // contents: Vec::new(),
         })
     }
+
+    pub fn column_size(&self) -> usize {
+        self.schema.column_size()
+    }
 }
