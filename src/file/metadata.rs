@@ -1,6 +1,20 @@
 use itertools::Itertools;
 use parquet::file::metadata::ParquetMetaData;
+use ratatui::widgets::Widget;
+use ratatui::{
+    buffer::Buffer,
+    layout::{Constraint, Rect},
+    prelude::Color,
+    style::{Style, Stylize},
+    symbols::border,
+    text::Line,
+    widgets::{Block, Cell, Row, Table},
+};
 use std::collections::{HashMap, HashSet};
+
+use crate::file::Renderable;
+use crate::utils::commas;
+use crate::utils::human_readable_bytes;
 
 #[derive(Debug)]
 pub struct FileMetadata {
@@ -84,5 +98,44 @@ impl FileMetadata {
             encodings,
             avg_row_size: avg_row_size as u64,
         })
+    }
+}
+
+impl Renderable for FileMetadata {
+    fn render_content(&self, area: Rect, buf: &mut Buffer) {
+        let metadata_block = Block::bordered()
+            .title(Line::from("File Metadata".yellow().bold()).centered())
+            .border_set(border::ROUNDED);
+
+        let inner = metadata_block.inner(area);
+        metadata_block.render(area, buf);
+
+        let kv_pairs: Vec<(String, String)> = vec![
+            ("Format version".into(), self.format_version.clone()),
+            ("Created by".into(), self.created_by.clone()),
+            ("Rows".into(), commas(self.num_rows as u64)),
+            ("Columns".into(), self.num_columns.to_string()),
+            ("Row groups".into(), self.num_row_groups.to_string()),
+            ("Size (raw)".into(), human_readable_bytes(self.raw_size)),
+            (
+                "Size (compressed)".into(),
+                human_readable_bytes(self.compressed_size),
+            ),
+            (
+                "Compression ratio".into(),
+                format!("{:.2}x", self.compression_ratio),
+            ),
+            ("Codecs (cols)".into(), self.codecs.clone()),
+            ("Encodings".into(), self.encodings.clone()),
+            ("Avg row size".into(), format!("{} B", self.avg_row_size)),
+        ];
+
+        let rows: Vec<Row> = kv_pairs
+            .into_iter()
+            .map(|(k, v)| Row::new(vec![Cell::from(k).bold().fg(Color::Blue), Cell::from(v)]))
+            .collect();
+
+        let table = Table::new(rows, vec![Constraint::Length(18), Constraint::Length(200)]);
+        table.render(inner, buf);
     }
 }
