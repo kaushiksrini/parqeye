@@ -8,6 +8,7 @@ use ratatui::{
     text::Line,
     widgets::{Block, Cell, Row, Table, Widget},
 };
+use std::cmp::min;
 
 use crate::file::Renderable;
 
@@ -18,6 +19,7 @@ pub struct FileSchemaTable<'a> {
     pub title_color: Color,
     pub selected_color: Color,
     pub border_style: border::Set,
+    pub horizontal_scroll: usize,
 }
 
 impl<'a> FileSchemaTable<'a> {
@@ -29,6 +31,7 @@ impl<'a> FileSchemaTable<'a> {
             title_color: Color::Green,
             selected_color: Color::Yellow,
             border_style: border::ROUNDED,
+            horizontal_scroll: 0,
         }
     }
 
@@ -52,11 +55,37 @@ impl<'a> FileSchemaTable<'a> {
         self.border_style = border_style;
         self
     }
+
+    pub fn with_horizontal_scroll(mut self, offset: usize) -> Self {
+        self.horizontal_scroll = offset;
+        self
+    }
+
+    pub fn scroll_left(&mut self) {
+        if self.horizontal_scroll > 0 {
+            self.horizontal_scroll -= 1;
+        }
+    }
+
+    pub fn scroll_right(&mut self) {
+        self.horizontal_scroll += 1;
+    }
+
+    pub fn get_max_scroll(&self) -> usize {
+        // Calculate how many columns we can show at full width
+        let available_width = 80; // Assume 80 characters available
+        let min_column_width = 12; // Minimum width for readability
+        let max_visible_columns = available_width / min_column_width;
+
+        // Total columns minus visible columns
+        let total_columns = 10usize; // We have 10 columns
+        total_columns.saturating_sub(max_visible_columns as usize)
+    }
 }
 
 impl<'a> Widget for FileSchemaTable<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let header = vec![
+        let all_headers = vec![
             "Repetition",
             "Physical",
             "Compressed",
@@ -69,35 +98,57 @@ impl<'a> Widget for FileSchemaTable<'a> {
             "Nulls",
         ];
 
-        let table_rows = self.schema.generate_table_rows(self.selected_index);
+        // Calculate how many columns we can show at full width
+        let available_width = area.width.saturating_sub(4); // Account for borders and spacing
+        let min_column_width = 12;
+        let max_visible_columns = (available_width / min_column_width).max(1);
 
-        let col_constraints = vec![
-            Constraint::Length(10), // Repetition
-            Constraint::Length(15), // Physical type
-            Constraint::Length(12), // Compressed size
-            Constraint::Length(12), // Uncompressed size
-            Constraint::Length(8),  // Compression ratio
-            Constraint::Length(25), // Encodings
-            Constraint::Length(13), // Compression
-            Constraint::Length(12), // Min value
-            Constraint::Length(12), // Max value
-            Constraint::Length(8),  // Null count
-        ];
+        // Clamp scroll offset to valid range
+        let max_scroll = all_headers
+            .len()
+            .saturating_sub(max_visible_columns as usize);
+        let horizontal_scroll= self.horizontal_scroll.min(max_scroll);
 
-        let table_widget = Table::new(table_rows, col_constraints)
+        // Generate table data with only visible columns and get column widths
+        let (visible_rows, column_widths) = self.schema.generate_table_rows_with_columns(
+            self.selected_index,
+            horizontal_scroll,
+            max_visible_columns as usize,
+        );
+
+        // Get visible columns
+        let visible_headers: Vec<_> = all_headers
+            .iter()
+            .skip(horizontal_scroll)
+            .take(max_visible_columns as usize)
+            .collect();
+
+        // Include header widths in the calculation and create constraints
+        let col_constraints: Vec<_> = visible_headers
+            .iter()
+            .enumerate()
+            .map(|(i, header)| {
+                let content_width = column_widths.get(i).cloned().unwrap_or(0);
+                let header_width = header.len();
+                // Use maximum of 30 for readability
+                Constraint::Length(min(content_width.max(header_width), 30) as u16 + 1)
+            })
+            .collect();
+
+        let table_widget = Table::new(visible_rows, col_constraints)
             .header(Row::new(
-                header
+                visible_headers
                     .into_iter()
-                    .map(|h| Cell::from(h).bold().fg(Color::Yellow)),
+                    .map(|h| Cell::from(*h).bold().fg(Color::Yellow)),
             ))
             .column_spacing(1)
             .block(
                 Block::bordered()
                     .title(
-                        Line::from(self.title)
-                            .centered()
-                            .bold()
-                            .fg(self.title_color),
+                        Line::from(format!("{} (←→ scroll)", self.title))
+                        .centered()
+                        .bold()
+                        .fg(self.title_color),
                     )
                     .border_set(self.border_style),
             );

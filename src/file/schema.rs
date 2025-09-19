@@ -4,15 +4,9 @@ use parquet::basic::{LogicalType, TimeUnit, Type as PhysicalType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::Type as ParquetType;
 use ratatui::{
-    buffer::Buffer,
-    layout::{Constraint, Rect},
     style::{Color, Stylize},
-    symbols::border,
-    text::Line,
-    widgets::{Block, Cell, Row, Table, Widget},
+    widgets::{Cell, Row},
 };
-
-use crate::file::Renderable;
 
 #[derive(Debug, Clone)]
 pub struct ColumnStats {
@@ -130,16 +124,24 @@ impl FileSchema {
             .max(24) // max for the bottom of the chart
     }
 
+    pub fn primitive_column_names(&self) -> Vec<String> {
+        self.columns
+            .iter()
+            .filter(|c| matches!(c, SchemaInfo::Primitive { .. }))
+            .map(|c| match c {
+                SchemaInfo::Primitive { name, .. } => name.clone(),
+                _ => unreachable!(),
+            })
+            .collect()
+    }
+
     pub fn generate_table_rows(&self, selected_index: Option<usize>) -> Vec<Row> {
         let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
-        
+
         self.columns
             .iter()
             .filter_map(|col| {
-                if let SchemaInfo::Primitive {
-                    name, info, stats, ..
-                } = col
-                {
+                if let SchemaInfo::Primitive { info, stats, .. } = col {
                     let compression_ratio = if stats.total_uncompressed_size > 0 {
                         format!(
                             "{:.2}x",
@@ -151,7 +153,7 @@ impl FileSchema {
                     };
 
                     let is_selected = selected_index == Some(primitive_index);
-                    
+
                     let mut row = Row::new([
                         Cell::from(info.repetition.clone()),
                         Cell::from(info.physical.clone()),
@@ -164,11 +166,15 @@ impl FileSchema {
                         Cell::from(stats.max.clone().unwrap_or_else(|| "NULL".to_string())),
                         Cell::from(stats.nulls.to_string()),
                     ]);
-                    
+
                     if is_selected {
-                        row = row.style(ratatui::style::Style::default().bg(Color::Yellow).fg(Color::Black));
+                        row = row.style(
+                            ratatui::style::Style::default()
+                                .bg(Color::Yellow)
+                                .fg(Color::Black),
+                        );
                     }
-                    
+
                     primitive_index += 1;
                     Some(row)
                 } else if let SchemaInfo::Group { repetition, .. } = col {
@@ -182,6 +188,125 @@ impl FileSchema {
                 }
             })
             .collect()
+    }
+
+    pub fn generate_table_rows_with_columns(
+        &self,
+        selected_index: Option<usize>,
+        start_col: usize,
+        num_cols: usize,
+    ) -> (Vec<Row>, Vec<usize>) {
+        let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
+        let mut column_widths = vec![0usize; num_cols];
+
+        let rows = self.columns
+            .iter()
+            .filter_map(|col| {
+                if let SchemaInfo::Primitive { info, stats, .. } = col {
+                    let compression_ratio = if stats.total_uncompressed_size > 0 {
+                        format!(
+                            "{:.2}x",
+                            stats.total_uncompressed_size as f64
+                                / stats.total_compressed_size as f64
+                        )
+                    } else {
+                        "N/A".to_string()
+                    };
+
+                    let is_selected = selected_index == Some(primitive_index);
+
+                    // Create all cells first
+                    let all_cells = vec![
+                        info.repetition.clone(),
+                        info.physical.clone(),
+                        format_size(stats.total_compressed_size),
+                        format_size(stats.total_uncompressed_size),
+                        compression_ratio,
+                        info.encoding.clone(),
+                        info.codec.clone(),
+                        stats.min.clone().unwrap_or_else(|| "NULL".to_string()),
+                        stats.max.clone().unwrap_or_else(|| "NULL".to_string()),
+                        stats.nulls.to_string(),
+                    ];
+
+                    // Select only the visible columns and track their content lengths
+                    let visible_cell_contents: Vec<_> = all_cells
+                        .into_iter()
+                        .skip(start_col)
+                        .take(num_cols)
+                        .collect();
+
+                    // Update column widths with the maximum seen so far
+                    for (col_idx, content) in visible_cell_contents.iter().enumerate() {
+                        column_widths[col_idx] = column_widths[col_idx].max(content.len());
+                    }
+
+                    // Create cells from the content
+                    let visible_cells: Vec<_> = visible_cell_contents
+                        .into_iter()
+                        .map(Cell::from)
+                        .collect();
+
+                    let mut row = Row::new(visible_cells);
+
+                    if is_selected {
+                        row = row.style(
+                            ratatui::style::Style::default()
+                                .bg(Color::Yellow)
+                                .fg(Color::Black),
+                        );
+                    }
+
+                    primitive_index += 1;
+                    Some(row)
+                } else if let SchemaInfo::Group { repetition, .. } = col {
+                    let all_cells = vec![
+                        repetition.clone(),
+                        "group".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                    ];
+
+                    let visible_cell_contents: Vec<_> = all_cells
+                        .into_iter()
+                        .skip(start_col)
+                        .take(num_cols)
+                        .collect();
+
+                    // Update column widths with the maximum seen so far
+                    for (col_idx, content) in visible_cell_contents.iter().enumerate() {
+                        column_widths[col_idx] = column_widths[col_idx].max(content.len());
+                    }
+
+                    let visible_cells: Vec<_> = visible_cell_contents
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, content)| {
+                            if idx == 0 {
+                                Cell::from(content.green())
+                            } else if idx == 1 {
+                                Cell::from(content.green())
+                            } else {
+                                Cell::from(content)
+                            }
+                        })
+                        .collect();
+
+                    let row = Row::new(visible_cells);
+                    Some(row)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        (rows, column_widths)
     }
 }
 
@@ -423,7 +548,6 @@ fn logical_type_to_string(logical_type: &LogicalType) -> String {
         _ => format!("{:?}", logical_type),
     }
 }
-
 
 /// Format byte size into human-readable format
 fn format_size(bytes: u64) -> String {
