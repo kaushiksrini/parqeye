@@ -7,9 +7,9 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::AppRenderView;
 use crate::file::Renderable;
-use crate::{components::SchemaTreeComponent, components::FileSchemaTable, tabs::TabType};
+use crate::{app::AppRenderView, components::ColumnSizesButterflyChart};
+use crate::{components::FileSchemaTable, components::SchemaTreeComponent, tabs::TabType};
 
 pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
@@ -43,17 +43,15 @@ impl<'a> AppWidget<'a> {
         // render the schema tree
         let tree_width = self.0.parquet_ctx.schema.tree_width() as u16;
         let [tree_area, central_area] =
-            Layout::horizontal([Constraint::Length(tree_width), Constraint::Fill(1)]).areas(area);
+            Layout::horizontal([Constraint::Length(tree_width + 1), Constraint::Fill(1)])
+                .areas(area);
         self.render_schema_tree(tree_area, buf);
 
         // Render the schema table with selection highlighting
         FileSchemaTable::new(&self.0.parquet_ctx.schema)
             .with_selected_index(*self.0.column_selected())
+            .with_horizontal_scroll(self.0.horizontal_scroll)
             .render(central_area, buf);
-    }
-
-    fn render_temp_view(&self, area: Rect, buf: &mut Buffer) {
-        "Need to implement this".render(area, buf);
     }
 
     fn render_schema_tree(&self, area: Rect, buf: &mut Buffer) {
@@ -63,12 +61,23 @@ impl<'a> AppWidget<'a> {
             .render(area, buf);
     }
 
+    fn render_visualize_view(&self, area: Rect, buf: &mut Buffer) {
+        // render the visualize view
+        "Visualize".render(area, buf);
+    }
+
     fn render_row_groups_view(&self, area: Rect, buf: &mut Buffer) {
         // render the schema tree
         let tree_width = self.0.parquet_ctx.schema.tree_width() as u16;
-        let [tree_area, _central_area] =
-            Layout::horizontal([Constraint::Length(tree_width), Constraint::Fill(1)]).areas(area);
+        let [tree_area, sizes_chart_area, _central_area] = Layout::horizontal([
+            Constraint::Length(tree_width),
+            Constraint::Fill(1),
+            Constraint::Fill(3),
+        ])
+        .areas(area);
         self.render_schema_tree(tree_area, buf);
+
+        ColumnSizesButterflyChart::new(&self.0.parquet_ctx.schema).render(sizes_chart_area, buf);
     }
 }
 
@@ -96,7 +105,9 @@ impl<'a> Widget for AppWidget<'a> {
             TabType::RowGroups => {
                 self.render_row_groups_view(inner_area, buf);
             }
-            _ => self.render_temp_view(inner_area, buf),
+            TabType::Visualize => {
+                self.render_visualize_view(inner_area, buf);
+            }
         }
     }
 }
