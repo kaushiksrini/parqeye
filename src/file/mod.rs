@@ -2,6 +2,7 @@ pub mod metadata;
 pub mod parquet_ctx;
 pub mod row_groups;
 pub mod schema;
+pub mod utils;
 
 use ratatui::{buffer::Buffer, layout::Rect, widgets::Block, widgets::Widget};
 
