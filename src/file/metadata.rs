@@ -5,16 +5,16 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Rect},
     prelude::Color,
-    style::{Style, Stylize},
+    style::Stylize,
     symbols::border,
     text::Line,
     widgets::{Block, Cell, Row, Table},
 };
 use std::collections::{HashMap, HashSet};
 
+use crate::file::utils::commas;
+use crate::file::utils::human_readable_bytes;
 use crate::file::Renderable;
-use crate::utils::commas;
-use crate::utils::human_readable_bytes;
 
 #[derive(Debug)]
 pub struct FileMetadata {
@@ -103,12 +103,12 @@ impl FileMetadata {
 
 impl Renderable for FileMetadata {
     fn render_content(&self, area: Rect, buf: &mut Buffer) {
-        let metadata_block = Block::bordered()
-            .title(Line::from("File Metadata".yellow().bold()).centered())
-            .border_set(border::ROUNDED);
+        // let metadata_block = Block::bordered()
+        //     .title(Line::from("File Metadata".yellow().bold()).centered())
+        //     .border_set(border::ROUNDED);
 
-        let inner = metadata_block.inner(area);
-        metadata_block.render(area, buf);
+        // let inner = metadata_block.inner(area);
+        // metadata_block.render(area, buf);
 
         let kv_pairs: Vec<(String, String)> = vec![
             ("Format version".into(), self.format_version.clone()),
@@ -130,12 +130,45 @@ impl Renderable for FileMetadata {
             ("Avg row size".into(), format!("{} B", self.avg_row_size)),
         ];
 
+        let max_value_size = kv_pairs.iter().map(|(_, v)| v.len()).max().unwrap_or(0) as u16;
+
         let rows: Vec<Row> = kv_pairs
             .into_iter()
-            .map(|(k, v)| Row::new(vec![Cell::from(k).bold().fg(Color::Blue), Cell::from(v)]))
+            .map(|(k, v)| {
+                Row::new(vec![
+                    Cell::from(format!("{:>18}", k)).bold().fg(Color::Blue),
+                    Cell::from(format!("{:<}", v)),
+                ])
+            })
             .collect();
 
-        let table = Table::new(rows, vec![Constraint::Length(18), Constraint::Length(200)]);
-        table.render(inner, buf);
+        // Calculate centered area for the table
+        let key_width = 18;
+        let value_width = max_value_size.max(20); // Ensure minimum width
+        let table_width = key_width + value_width + 3; // +3 for spacing and borders
+        let table_height = rows.len() as u16;
+        let center_x = area.x + (area.width.saturating_sub(table_width)) / 2;
+        let center_y = area.y + (area.height.saturating_sub(table_height)) / 2;
+
+        let centered_area = Rect {
+            x: center_x,
+            y: center_y,
+            width: table_width + 2,
+            height: table_height + 2,
+        };
+
+        let table = Table::new(
+            rows,
+            vec![
+                Constraint::Length(key_width),
+                Constraint::Length(value_width),
+            ],
+        )
+        .block(
+            Block::bordered()
+                .title(Line::from("File Metadata".yellow().bold()).centered())
+                .border_set(border::ROUNDED),
+        );
+        table.render(centered_area, buf);
     }
 }
