@@ -3,6 +3,11 @@ use parquet::column::page::{Page, PageReader};
 use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
 use parquet::file::reader::FileReader;
 use parquet::file::reader::{ChunkReader, SerializedFileReader};
+use parquet::file::statistics::Statistics;
+
+pub struct RowGroupPageInfo {
+    pub page_infos: Vec<PageInfo>,
+}
 
 pub struct HasStats {
     pub has_stats: bool,
@@ -18,14 +23,37 @@ pub struct PageInfo {
     pub encoding: String,
 }
 
+pub struct RowGroupColumnStats {
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub null_count: Option<u64>,
+    pub distinct_count: Option<u64>,
+}
+
 pub struct RowGroupColumnMetadata {
     pub file_offset: i64,
     pub column_path: String,
     pub has_stats: HasStats,
+    pub statistics: Option<RowGroupColumnStats>,
     pub total_compressed_size: i64,
     pub total_uncompressed_size: i64,
     pub compression_type: String,
-    pub pages: Vec<PageInfo>,
+    pub pages: RowGroupPageInfo,
+}
+
+pub struct RowGroups {
+    pub row_groups: Vec<RowGroupStats>,
+}
+
+impl RowGroups {
+    pub fn from_file_reader<R: ChunkReader + 'static>(
+        reader: &SerializedFileReader<R>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let row_groups = (0..reader.metadata().num_row_groups())
+            .map(|idx| RowGroupStats::from_file_reader(reader, idx))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { row_groups })
+    }
 }
 
 pub struct RowGroupStats {
@@ -45,7 +73,6 @@ impl RowGroupStats {
         let rg_md: &RowGroupMetaData = reader.metadata().row_group(idx);
         let compressed_size = rg_md.columns().iter().map(|c| c.compressed_size()).sum();
         let uncompressed_size = rg_md.columns().iter().map(|c| c.uncompressed_size()).sum();
-
         let compression_ratio = format!("{:.2}", compressed_size as f64 / uncompressed_size as f64);
 
         let column_metadata = (0..rg_md.num_columns())
@@ -77,6 +104,8 @@ impl RowGroupColumnMetadata {
             .get_column_page_reader(col_idx)?;
         let pages = Self::make_page_info(&mut page_reader)?;
 
+        let statistics = RowGroupColumnStats::new(column_chunk.statistics());
+
         Ok(RowGroupColumnMetadata {
             file_offset: column_chunk.file_offset(),
             column_path: column_chunk.column_descr().path().to_string(),
@@ -87,6 +116,7 @@ impl RowGroupColumnMetadata {
                 has_page_encoding_stats: column_chunk.page_encoding_stats().is_some()
                     && !column_chunk.page_encoding_stats().unwrap().is_empty(),
             },
+            statistics,
             total_compressed_size: column_chunk.compressed_size(),
             total_uncompressed_size: column_chunk.uncompressed_size(),
             compression_type: column_chunk.compression().to_string(),
@@ -96,7 +126,7 @@ impl RowGroupColumnMetadata {
 
     fn make_page_info(
         page_reader: &mut Box<dyn PageReader>,
-    ) -> Result<Vec<PageInfo>, Box<dyn std::error::Error>> {
+    ) -> Result<RowGroupPageInfo, Box<dyn std::error::Error>> {
         let mut page_info = Vec::new();
         while let Ok(page) = page_reader.get_next_page() {
             if let Some(page) = page {
@@ -105,7 +135,9 @@ impl RowGroupColumnMetadata {
                 break;
             }
         }
-        Ok(page_info)
+        Ok(RowGroupPageInfo {
+            page_infos: page_info,
+        })
     }
 }
 
@@ -136,6 +168,44 @@ impl From<&Page> for PageInfo {
             size: page.buffer().len(),
             rows: page.num_values() as usize,
             encoding,
+        }
+    }
+}
+
+macro_rules! extract_stat_value {
+    ($stats:expr, $method:ident) => {
+        match $stats {
+            Statistics::Boolean(s) => s.$method().map(|v| v.to_string()),
+            Statistics::Int32(s) => s.$method().map(|v| v.to_string()),
+            Statistics::Int64(s) => s.$method().map(|v| v.to_string()),
+            Statistics::Int96(s) => s.$method().map(|v| format!("{:?}", v)),
+            Statistics::Float(s) => s.$method().map(|v| v.to_string()),
+            Statistics::Double(s) => s.$method().map(|v| v.to_string()),
+            Statistics::ByteArray(s) => s.$method().and_then(|bytes| {
+                std::str::from_utf8(bytes.data())
+                    .ok()
+                    .map(|s| s.to_string())
+            }),
+            Statistics::FixedLenByteArray(s) => s.$method().and_then(|bytes| {
+                std::str::from_utf8(bytes.data())
+                    .ok()
+                    .map(|s| s.to_string())
+            }),
+        }
+    };
+}
+
+impl RowGroupColumnStats {
+    fn new(stats: Option<&Statistics>) -> Option<Self> {
+        if let Some(stats) = stats {
+            Some(Self {
+                min: extract_stat_value!(stats, min_opt),
+                max: extract_stat_value!(stats, max_opt),
+                null_count: stats.null_count_opt(),
+                distinct_count: stats.distinct_count_opt(),
+            })
+        } else {
+            None
         }
     }
 }

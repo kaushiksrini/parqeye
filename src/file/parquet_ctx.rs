@@ -2,13 +2,13 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 
 use crate::file::metadata::FileMetadata;
-use crate::file::row_groups::RowGroupStats;
+use crate::file::row_groups::RowGroups;
 use crate::file::schema::FileSchema;
 
 pub struct ParquetCtx {
     pub file_path: String,
     pub metadata: FileMetadata,
-    pub row_groups: Vec<RowGroupStats>,
+    pub row_groups: RowGroups,
     pub schema: FileSchema,
     // pub contents: Vec<u8>,
 }
@@ -18,11 +18,9 @@ impl ParquetCtx {
         let file = File::open(file_path)?;
         let reader: SerializedFileReader<File> = SerializedFileReader::new(file)?;
         let md = reader.metadata();
-        let row_groups = (0..md.num_row_groups())
-            .map(|idx| RowGroupStats::from_file_reader(&reader, idx))
-            .collect::<Result<Vec<_>, _>>()?;
+        let row_groups = RowGroups::from_file_reader(&reader)?;
 
-        // TODO: async calls
+        // TODO: async calls?
         let metadata = FileMetadata::from_metadata(&md)?;
         let schema = FileSchema::from_metadata(&md)?;
 
