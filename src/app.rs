@@ -4,6 +4,7 @@ use std::io;
 
 use crate::file::parquet_ctx::ParquetCtx;
 use crate::tabs::{TabManager, TabType};
+use std::cmp::max;
 
 pub struct AppRenderView<'a> {
     pub title: &'a str,
@@ -14,6 +15,7 @@ pub struct AppRenderView<'a> {
     row_group_selected: usize,
     // schema_tree_height: usize,
     visualize_col_offset: usize,
+    pub horizontal_scroll: usize,
 }
 
 impl<'a> AppRenderView<'a> {
@@ -27,6 +29,7 @@ impl<'a> AppRenderView<'a> {
             row_group_selected: app.row_group_selected,
             // schema_tree_height: app.schema_tree_height,
             visualize_col_offset: app.visualize_col_offset,
+            horizontal_scroll: app.horizontal_scroll,
         }
     }
 
@@ -54,6 +57,7 @@ pub struct App<'a> {
     // pub schema_tree_height: usize,
     // Visualize tab state
     pub visualize_col_offset: usize,
+    pub horizontal_scroll: usize,
 }
 
 impl<'a> App<'a> {
@@ -67,6 +71,7 @@ impl<'a> App<'a> {
             scroll_offset: 0,
             row_group_selected: 0,
             visualize_col_offset: 0,
+            horizontal_scroll: 0,
         }
     }
 
@@ -88,10 +93,6 @@ impl<'a> App<'a> {
         };
         Ok(())
     }
-
-    // pub fn set_schema_tree_height(&mut self, new_height: usize) {
-    //     self.schema_tree_height = new_height;
-    // }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
@@ -126,6 +127,18 @@ impl<'a> App<'a> {
                             self.column_selected = None;
                         }
                     }
+                }
+                _ => {}
+            },
+            KeyCode::Right => match self.tabs.active_tab() {
+                TabType::Schema => {
+                    self.horizontal_scroll += 1;
+                }
+                _ => {}
+            },
+            KeyCode::Left => match self.tabs.active_tab() {
+                TabType::Schema => {
+                    self.horizontal_scroll = max(0, self.horizontal_scroll.saturating_sub(1));
                 }
                 _ => {}
             },
