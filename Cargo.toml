@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }         # for CLI parsing
-parquet = { version = "54.2.1", features = ["cli","async","json"] }  # core Parquet APIs
+parquet = { version = "54.2.1", features = ["cli","async","json","arrow"] }  # core Parquet APIs
+arrow = "54.2.1"                                        # Arrow arrays and data types
 parquet-format = "4.0.0"                                # Thrift structs
 thiserror = "1"                                         # ergonomic error types
 tokio = { version = "1", features = ["fs","io-util"] }  # async file I/O
