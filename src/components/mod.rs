@@ -1,9 +1,13 @@
-mod metadata;
-mod schema_tree;
-mod scrollbar;
-mod tabs;
+pub mod chart;
+pub mod column_sizes;
+pub mod data_table;
+pub mod schema_table;
+pub mod schema_tree;
+pub mod scrollbar;
 
-pub use metadata::MetadataComponent;
+pub use chart::LineChart;
+pub use column_sizes::ColumnSizesButterflyChart;
+pub use data_table::DataTable;
+pub use schema_table::FileSchemaTable;
 pub use schema_tree::SchemaTreeComponent;
 pub use scrollbar::ScrollbarComponent;
-pub use tabs::TabsComponent;

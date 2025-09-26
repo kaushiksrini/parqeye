@@ -1,10 +1,15 @@
 use datatools::app::App;
+use datatools::file::parquet_ctx::ParquetCtx;
 use std::io;
 
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(author, version, about = "Tool to visualize parquet files")]
+#[command(
+    author,
+    version,
+    about = "Command line tool to visualize parquet files"
+)]
 pub struct Opts {
     #[command(subcommand)]
     pub cmd: Command,
@@ -25,7 +30,12 @@ fn main() -> io::Result<()> {
 
 fn tui(path: &str) -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let app_result = App::default().run(&mut terminal, path);
+
+    let file_info = ParquetCtx::from_file(path)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+    let mut app = App::new(&file_info);
+    app.run(&mut terminal)?;
     ratatui::restore();
-    app_result
+    Ok(())
 }

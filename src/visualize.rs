@@ -35,7 +35,11 @@ pub fn read_metadata(path: &str) -> io::Result<ParquetMetaData> {
 }
 
 // Lazily read a window of rows using parquet::record reader, avoiding loading entire file.
-pub fn load_rows_window(path: &str, start: usize, limit: usize) -> io::Result<(Vec<Row>, Vec<String>)> {
+pub fn load_rows_window(
+    path: &str,
+    start: usize,
+    limit: usize,
+) -> io::Result<(Vec<Row>, Vec<String>)> {
     let file = File::open(Path::new(path))?;
     let reader = SerializedFileReader::new(file).map_err(|e| io::Error::other(e.to_string()))?;
 
@@ -63,5 +67,3 @@ pub fn load_rows_window(path: &str, start: usize, limit: usize) -> io::Result<(V
 pub fn format_row_value(row: &Row) -> String {
     format!("{}", row)
 }
-
-

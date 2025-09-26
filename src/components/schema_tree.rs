@@ -1,4 +1,4 @@
-use crate::schema::SchemaColumnType;
+use crate::file::schema::SchemaInfo;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -8,8 +8,8 @@ use ratatui::{
     widgets::{Block, List, ListItem, Widget},
 };
 
-pub struct SchemaTreeComponent {
-    pub schema_columns: Vec<SchemaColumnType>,
+pub struct SchemaTreeComponent<'a> {
+    pub schema_columns: &'a Vec<SchemaInfo>,
     pub selected_index: Option<usize>,
     pub title: String,
     pub title_color: Color,
@@ -21,8 +21,8 @@ pub struct SchemaTreeComponent {
     pub show_legend: bool,
 }
 
-impl SchemaTreeComponent {
-    pub fn new(schema_columns: Vec<SchemaColumnType>) -> Self {
+impl<'a> SchemaTreeComponent<'a> {
+    pub fn new(schema_columns: &'a Vec<SchemaInfo>) -> Self {
         Self {
             schema_columns,
             selected_index: None,
@@ -72,36 +72,53 @@ impl SchemaTreeComponent {
     }
 }
 
-impl Widget for SchemaTreeComponent {
+impl<'a> Widget for SchemaTreeComponent<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        // Create a mapping from primitive column index to schema tree index
+        let primitive_to_schema_map: Vec<usize> = self
+            .schema_columns
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, line)| matches!(line, SchemaInfo::Primitive { .. }).then_some(idx))
+            .collect();
+
         let items: Vec<ListItem> = self
             .schema_columns
             .iter()
             .enumerate()
-            .map(|(idx, line)| match line {
-                SchemaColumnType::Root { display: ref d, .. } => {
-                    ListItem::new(d.clone()).fg(self.root_color)
-                }
-                SchemaColumnType::Primitive { display: ref d, .. } => {
-                    let mut item = ListItem::new(d.clone()).fg(self.primitive_color);
-                    if let Some(selected_index) = self.selected_index {
-                        if idx == selected_index {
-                            item = item.fg(self.selected_color).bold();
-                        }
+            .map(|(idx, line)| {
+                let is_selected = if let Some(selected_primitive_idx) = self.selected_index {
+                    // Convert primitive index to schema tree index
+                    if let Some(&schema_idx) =
+                        primitive_to_schema_map.get(selected_primitive_idx.saturating_sub(1))
+                    {
+                        idx == schema_idx
+                    } else {
+                        false
                     }
-                    item
-                }
-                SchemaColumnType::Group { display: ref d, .. } => {
-                    let mut item = ListItem::new(d.clone()).fg(self.group_color);
-                    if let Some(selected_index) = self.selected_index {
-                        if idx == selected_index {
-                            item = item.fg(self.selected_color).bold();
-                        }
+                } else {
+                    false
+                };
+
+                match line {
+                    SchemaInfo::Root { display: ref d, .. } => {
+                        ListItem::new(d.clone()).fg(self.root_color)
                     }
-                    item
+                    SchemaInfo::Primitive { display: ref d, .. } => {
+                        let mut item = ListItem::new(d.clone()).fg(self.primitive_color);
+                        if is_selected {
+                            item = item.bg(self.selected_color).fg(Color::Black);
+                        }
+                        item
+                    }
+                    SchemaInfo::Group { display: ref d, .. } => {
+                        ListItem::new(d.clone()).fg(self.group_color)
+                    }
                 }
             })
             .collect();
+
+        // highlight the color
 
         let mut block = Block::bordered()
             .title(Line::from(self.title.fg(self.title_color).bold()).centered())

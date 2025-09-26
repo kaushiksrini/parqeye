@@ -30,9 +30,9 @@ pub fn human_readable_count(n: u64) -> String {
     }
 }
 
-pub fn truncate_str(s: &str, max: usize) -> String {
-    if s.chars().count() > max {
-        let truncated: String = s.chars().take(max - 1).collect();
+pub fn truncate_str(s: &str, width: usize) -> String {
+    if s.chars().count() > width {
+        let truncated: String = s.chars().take(width - 1).collect();
         format!("{truncated}…")
     } else {
         s.to_string()
