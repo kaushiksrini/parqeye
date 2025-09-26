@@ -1,16 +1,17 @@
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 
+
 use crate::file::metadata::FileMetadata;
 use crate::file::row_groups::RowGroups;
 use crate::file::schema::FileSchema;
-
+use crate::file::sample_data::ParquetSampleData;
 pub struct ParquetCtx {
     pub file_path: String,
     pub metadata: FileMetadata,
     pub row_groups: RowGroups,
     pub schema: FileSchema,
-    // pub contents: Vec<u8>,
+    pub sample_data: Option<ParquetSampleData>,
 }
 
 impl ParquetCtx {
@@ -24,12 +25,15 @@ impl ParquetCtx {
         let metadata = FileMetadata::from_metadata(&md)?;
         let schema = FileSchema::from_metadata(&md)?;
 
+        // Read sample data
+        let sample_data = ParquetSampleData::read_sample_data(file_path).ok();
+
         Ok(ParquetCtx {
             file_path: file_path.to_string(),
             metadata,
             row_groups,
             schema,
-            // contents: Vec::new(),
+            sample_data,
         })
     }
 

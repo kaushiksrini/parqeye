@@ -131,13 +131,13 @@ impl<'a> App<'a> {
                 _ => {}
             },
             KeyCode::Right => match self.tabs.active_tab() {
-                TabType::Schema => {
+                TabType::Schema | TabType::Visualize => {
                     self.horizontal_scroll += 1;
                 }
                 _ => {}
             },
             KeyCode::Left => match self.tabs.active_tab() {
-                TabType::Schema => {
+                TabType::Schema | TabType::Visualize => {
                     self.horizontal_scroll = max(0, self.horizontal_scroll.saturating_sub(1));
                 }
                 _ => {}

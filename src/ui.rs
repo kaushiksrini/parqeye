@@ -9,7 +9,7 @@ use ratatui::{
 
 use crate::file::Renderable;
 use crate::{app::AppRenderView, components::ColumnSizesButterflyChart};
-use crate::{components::FileSchemaTable, components::SchemaTreeComponent, tabs::TabType};
+use crate::{components::DataTable, components::FileSchemaTable, components::SchemaTreeComponent, tabs::{TabType}};
 
 pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
@@ -61,11 +61,6 @@ impl<'a> AppWidget<'a> {
             .render(area, buf);
     }
 
-    fn render_visualize_view(&self, area: Rect, buf: &mut Buffer) {
-        // render the visualize view
-        "Visualize".render(area, buf);
-    }
-
     fn render_row_groups_view(&self, area: Rect, buf: &mut Buffer) {
         // render the schema tree
         let tree_width = self.0.parquet_ctx.schema.tree_width() as u16;
@@ -78,6 +73,16 @@ impl<'a> AppWidget<'a> {
         self.render_schema_tree(tree_area, buf);
 
         ColumnSizesButterflyChart::new(&self.0.parquet_ctx.schema).render(sizes_chart_area, buf);
+    }
+
+    fn render_visualize_view(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(ref sample_data) = self.0.parquet_ctx.sample_data {
+            DataTable::new(sample_data)
+                .with_horizontal_scroll(self.0.horizontal_scroll)
+                .render(area, buf);
+        } else {
+            "No sample data available - failed to read parquet file data.".render(area, buf);
+        }
     }
 }
 
