@@ -13,8 +13,6 @@ pub struct AppRenderView<'a> {
     tabs: &'a TabManager,
     column_selected: Option<usize>,
     row_group_selected: usize,
-    // schema_tree_height: usize,
-    visualize_col_offset: usize,
     pub horizontal_scroll: usize,
 }
 
@@ -27,8 +25,6 @@ impl<'a> AppRenderView<'a> {
             tabs: &app.tabs,
             column_selected: app.column_selected,
             row_group_selected: app.row_group_selected,
-            // schema_tree_height: app.schema_tree_height,
-            visualize_col_offset: app.visualize_col_offset,
             horizontal_scroll: app.horizontal_scroll,
         }
     }
@@ -44,6 +40,10 @@ impl<'a> AppRenderView<'a> {
     pub fn column_selected(&self) -> &Option<usize> {
         &self.column_selected
     }
+
+    pub fn row_group_selected(&self) -> usize {
+        self.row_group_selected
+    }
 }
 
 pub struct App<'a> {
@@ -54,9 +54,6 @@ pub struct App<'a> {
     pub column_selected: Option<usize>,
     pub scroll_offset: usize,
     pub row_group_selected: usize,
-    // pub schema_tree_height: usize,
-    // Visualize tab state
-    pub visualize_col_offset: usize,
     pub horizontal_scroll: usize,
 }
 
@@ -70,7 +67,6 @@ impl<'a> App<'a> {
             column_selected: None,
             scroll_offset: 0,
             row_group_selected: 0,
-            visualize_col_offset: 0,
             horizontal_scroll: 0,
         }
     }
