@@ -8,8 +8,8 @@ use ratatui::{
 };
 
 use crate::file::Renderable;
-use crate::{app::AppRenderView, components::ColumnSizesButterflyChart};
-use crate::{components::DataTable, components::FileSchemaTable, components::SchemaTreeComponent, tabs::{TabType}};
+use crate::{app::AppRenderView};
+use crate::{components::DataTable, components::FileSchemaTable, components::RowGroupMetadata, components::SchemaTreeComponent, tabs::{TabType}};
 
 pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
@@ -64,15 +64,22 @@ impl<'a> AppWidget<'a> {
     fn render_row_groups_view(&self, area: Rect, buf: &mut Buffer) {
         // render the schema tree
         let tree_width = self.0.parquet_ctx.schema.tree_width() as u16;
-        let [tree_area, sizes_chart_area, _central_area] = Layout::horizontal([
+        let [tree_area, _central_area] = Layout::horizontal([
             Constraint::Length(tree_width),
+            // Constraint::Fill(1),
             Constraint::Fill(1),
-            Constraint::Fill(3),
         ])
         .areas(area);
         self.render_schema_tree(tree_area, buf);
 
-        ColumnSizesButterflyChart::new(&self.0.parquet_ctx.schema).render(sizes_chart_area, buf);
+        if let Some(ref column_selected) = self.0.column_selected() {
+            // if some column selected, then render the column stats for that row group
+            let _column_group_name = self.0.parquet_ctx.schema.column_group_name(*column_selected);
+        } else {
+            RowGroupMetadata::new(&self.0.parquet_ctx.row_groups.row_groups[self.0.row_group_selected()], self.0.parquet_ctx.row_groups.row_groups.len())
+                .render(_central_area, buf);       
+        }
+
     }
 
     fn render_visualize_view(&self, area: Rect, buf: &mut Buffer) {
