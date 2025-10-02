@@ -153,9 +153,10 @@ impl<'a> Widget for DataTable<'a> {
                 let cells: Vec<Cell> = row_data
                     .into_iter()
                     .map(|cell_data| {
-                        // Truncate cell data if too long
-                        let truncated = if cell_data.len() > 23 {
-                            format!("{}...", &cell_data[..20])
+                        // Truncate cell data if too long (Unicode-safe)
+                        let truncated = if cell_data.chars().count() > 23 {
+                            let truncated_chars: String = cell_data.chars().take(20).collect();
+                            format!("{}...", truncated_chars)
                         } else {
                             cell_data
                         };
