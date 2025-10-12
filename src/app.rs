@@ -95,9 +95,11 @@ impl<'a> App<'a> {
             KeyCode::Char('q') => self.exit(),
             KeyCode::Tab => {
                 self.tabs.next();
+                self.horizontal_scroll = 0;
             }
             KeyCode::BackTab => {
                 self.tabs.prev();
+                self.horizontal_scroll = 0;
             }
             KeyCode::Down => {
                 let total_columns: usize = self.parquet_ctx.schema.column_size();
