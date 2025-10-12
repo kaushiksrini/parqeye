@@ -103,13 +103,6 @@ impl FileMetadata {
 
 impl Renderable for FileMetadata {
     fn render_content(&self, area: Rect, buf: &mut Buffer) {
-        // let metadata_block = Block::bordered()
-        //     .title(Line::from("File Metadata".yellow().bold()).centered())
-        //     .border_set(border::ROUNDED);
-
-        // let inner = metadata_block.inner(area);
-        // metadata_block.render(area, buf);
-
         let kv_pairs: Vec<(String, String)> = vec![
             ("Format version".into(), self.format_version.clone()),
             ("Created by".into(), self.created_by.clone()),
