@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::AppRenderView;
+use crate::{app::AppRenderView, components::RowGroupColumnMetadataComponent};
 use crate::{
     components::DataTable, components::FileSchemaTable, components::RowGroupMetadata,
     components::SchemaTreeComponent, tabs::TabType,
@@ -85,12 +85,11 @@ impl<'a> AppWidget<'a> {
         .render(rg_progress, buf);
 
         if let Some(ref column_selected) = self.0.column_selected() {
-            // if some column selected, then render the column stats for that row group
-            let _column_group_name = self
-                .0
-                .parquet_ctx
-                .schema
-                .column_group_name(*column_selected);
+            RowGroupColumnMetadataComponent::new(
+                &self.0.parquet_ctx.row_groups.row_groups[self.0.row_group_selected()]
+                    .column_metadata[*column_selected - 1],
+            )
+            .render(central_area, buf);
         } else {
             // Display row group level statistics and charts when no column is selected
             RowGroupMetadata::new(
