@@ -1,6 +1,6 @@
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use arrow::record_batch::RecordBatch;
 use arrow::array::Array;
+use arrow::record_batch::RecordBatch;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::sync::Arc;
 
 use std::fs::File;
@@ -12,16 +12,17 @@ pub struct ParquetSampleData {
     pub total_columns: usize,
 }
 
-
 impl ParquetSampleData {
-    pub fn read_sample_data(file_path: &str) -> Result<ParquetSampleData, Box<dyn std::error::Error>> {
+    pub fn read_sample_data(
+        file_path: &str,
+    ) -> Result<ParquetSampleData, Box<dyn std::error::Error>> {
         let file = File::open(file_path)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-        
+
         // Get the flattened schema
         let schema = builder.schema();
         let flattened_columns = Self::flatten_schema_columns(&schema);
-        
+
         // Build reader and read first 100 rows
         let mut reader = builder.build()?;
         let mut all_rows = Vec::new();
@@ -32,7 +33,7 @@ impl ParquetSampleData {
         while let Some(batch_result) = reader.next() {
             let batch = batch_result?;
             let batch_rows = batch.num_rows();
-            
+
             if total_rows_read + batch_rows > MAX_ROWS {
                 // Take only the remaining rows needed
                 let needed_rows = MAX_ROWS - total_rows_read;
@@ -44,7 +45,7 @@ impl ParquetSampleData {
                 let rows = Self::extract_rows_from_batch(&batch, &flattened_columns)?;
                 all_rows.extend(rows);
                 total_rows_read += batch_rows;
-                
+
                 if total_rows_read >= MAX_ROWS {
                     break;
                 }
@@ -60,11 +61,11 @@ impl ParquetSampleData {
 
     fn flatten_schema_columns(schema: &arrow::datatypes::Schema) -> Vec<String> {
         let mut flattened = Vec::new();
-        
+
         for field in schema.fields() {
             Self::flatten_field(field, String::new(), &mut flattened);
         }
-        
+
         flattened
     }
 
@@ -88,28 +89,31 @@ impl ParquetSampleData {
     }
 
     fn extract_rows_from_batch(
-        batch: &RecordBatch, 
-        _column_names: &[String]
+        batch: &RecordBatch,
+        _column_names: &[String],
     ) -> Result<Vec<Vec<String>>, Box<dyn std::error::Error>> {
         let mut rows = Vec::new();
         let num_rows = batch.num_rows();
-        
+
         for row_idx in 0..num_rows {
             let mut row = Vec::new();
-            
+
             for col_idx in 0..batch.num_columns() {
                 let array = batch.column(col_idx);
                 let value = Self::extract_value_from_array(array, row_idx)?;
                 row.push(value);
             }
-            
+
             rows.push(row);
         }
-        
+
         Ok(rows)
     }
 
-    fn extract_value_from_array(array: &Arc<dyn Array>, row_idx: usize) -> Result<String, Box<dyn std::error::Error>> {
+    fn extract_value_from_array(
+        array: &Arc<dyn Array>,
+        row_idx: usize,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         use arrow::array::*;
         use arrow::datatypes::DataType;
 
@@ -178,30 +182,38 @@ impl ParquetSampleData {
                 let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
                 Ok(array.value(row_idx).to_string())
             }
-            DataType::Timestamp(unit, _) => {
-                match unit {
-                    arrow::datatypes::TimeUnit::Second => {
-                        let array = array.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
-                        Ok(array.value(row_idx).to_string())
-                    }
-                    arrow::datatypes::TimeUnit::Millisecond => {
-                        let array = array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap();
-                        Ok(array.value(row_idx).to_string())
-                    }
-                    arrow::datatypes::TimeUnit::Microsecond => {
-                        let array = array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
-                        Ok(array.value(row_idx).to_string())
-                    }
-                    arrow::datatypes::TimeUnit::Nanosecond => {
-                        let array = array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap();
-                        Ok(array.value(row_idx).to_string())
-                    }
+            DataType::Timestamp(unit, _) => match unit {
+                arrow::datatypes::TimeUnit::Second => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<TimestampSecondArray>()
+                        .unwrap();
+                    Ok(array.value(row_idx).to_string())
                 }
-            }
+                arrow::datatypes::TimeUnit::Millisecond => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<TimestampMillisecondArray>()
+                        .unwrap();
+                    Ok(array.value(row_idx).to_string())
+                }
+                arrow::datatypes::TimeUnit::Microsecond => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .unwrap();
+                    Ok(array.value(row_idx).to_string())
+                }
+                arrow::datatypes::TimeUnit::Nanosecond => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .unwrap();
+                    Ok(array.value(row_idx).to_string())
+                }
+            },
             // TODO: Handle Dictionary, List, and other types. The columns are not extracted properly either.
-            _ => {
-                Ok(format!("O {:?}", array.slice(row_idx, 1)))
-            }
+            _ => Ok(format!("O {:?}", array.slice(row_idx, 1))),
         }
     }
 }

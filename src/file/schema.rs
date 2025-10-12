@@ -207,7 +207,8 @@ impl FileSchema {
         let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
         let mut column_widths = vec![0usize; num_cols];
 
-        let rows = self.columns
+        let rows = self
+            .columns
             .iter()
             .filter_map(|col| {
                 if let SchemaInfo::Primitive { info, stats, .. } = col {
@@ -250,10 +251,8 @@ impl FileSchema {
                     }
 
                     // Create cells from the content
-                    let visible_cells: Vec<_> = visible_cell_contents
-                        .into_iter()
-                        .map(Cell::from)
-                        .collect();
+                    let visible_cells: Vec<_> =
+                        visible_cell_contents.into_iter().map(Cell::from).collect();
 
                     let mut row = Row::new(visible_cells);
 

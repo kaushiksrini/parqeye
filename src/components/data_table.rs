@@ -84,23 +84,27 @@ impl<'a> DataTable<'a> {
         self.data.total_columns.saturating_sub(max_visible_columns)
     }
 
-    fn calculate_column_widths(&self, headers: &[String], visible_rows: &[Vec<String>]) -> Vec<usize> {
+    fn calculate_column_widths(
+        &self,
+        headers: &[String],
+        visible_rows: &[Vec<String>],
+    ) -> Vec<usize> {
         let mut widths = Vec::new();
-        
+
         for (col_idx, header) in headers.iter().enumerate() {
             let mut max_width = header.len();
-            
+
             // Check content width for this column
             for row in visible_rows {
                 if let Some(cell) = row.get(col_idx) {
                     max_width = max_width.max(cell.len());
                 }
             }
-            
+
             // Use minimum width of 8 and maximum of 25 for readability
             widths.push(min(max_width.max(8), 25));
         }
-        
+
         widths
     }
 }
@@ -117,7 +121,9 @@ impl<'a> Widget for DataTable<'a> {
         let horizontal_scroll = self.horizontal_scroll.min(max_scroll);
 
         // Get visible columns
-        let visible_headers: Vec<String> = self.data.flattened_columns
+        let visible_headers: Vec<String> = self
+            .data
+            .flattened_columns
             .iter()
             .skip(horizontal_scroll)
             .take(max_visible_columns)
@@ -125,7 +131,9 @@ impl<'a> Widget for DataTable<'a> {
             .collect();
 
         // Get visible data for each row
-        let visible_rows: Vec<Vec<String>> = self.data.rows
+        let visible_rows: Vec<Vec<String>> = self
+            .data
+            .rows
             .iter()
             .map(|row| {
                 row.iter()
