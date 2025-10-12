@@ -104,6 +104,14 @@ impl FileSchema {
         Ok(FileSchema { columns: lines })
     }
 
+    pub fn column_group_name(&self, index: usize) -> String {
+        match self.columns.get(index).unwrap() {
+            SchemaInfo::Primitive { name, .. } => name.clone(),
+            SchemaInfo::Group { name, .. } => name.clone(),
+            _ => unreachable!(),
+        }
+    }
+
     pub fn column_size(&self) -> usize {
         self.columns
             .iter()
