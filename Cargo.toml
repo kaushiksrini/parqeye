@@ -12,4 +12,4 @@ ratatui = "0.29.0"
 crossterm = "0.29.0"
 chrono = "0.4"                                          # for timestamp handling
 itertools = "0.14.0"
-polars = { version = "0.51.0", features = ["lazy", "parquet"] } 
+polars = { version = "0.51.0", features = ["lazy", "parquet", "dtype-decimal"] } 
