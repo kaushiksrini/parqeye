@@ -19,8 +19,6 @@ impl<'a> RowGroupMetadata<'a> {
 
 impl<'a> Widget for RowGroupMetadata<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        
-
         let vertical_areas = Layout::vertical([
             Constraint::Length(3),
             Constraint::Length(3),
