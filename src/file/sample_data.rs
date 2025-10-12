@@ -213,7 +213,7 @@ impl ParquetSampleData {
                 }
             },
             // TODO: Handle Dictionary, List, and other types. The columns are not extracted properly either.
-            _ => Ok(format!("O {:?}", array.slice(row_idx, 1))),
+            _ => Ok(format!("{:?}", array.slice(row_idx, 1))),
         }
     }
 }
