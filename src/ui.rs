@@ -76,7 +76,8 @@ impl<'a> AppWidget<'a> {
             // if some column selected, then render the column stats for that row group
             let _column_group_name = self.0.parquet_ctx.schema.column_group_name(*column_selected);
         } else {
-            RowGroupMetadata::new(&self.0.parquet_ctx.row_groups.row_groups[self.0.row_group_selected()], self.0.parquet_ctx.row_groups.row_groups.len())
+            // Display row group level statistics and charts when no column is selected
+            RowGroupMetadata::new(&self.0.parquet_ctx.row_groups.row_groups, self.0.row_group_selected())
                 .render(_central_area, buf);       
         }
 
