@@ -2,8 +2,8 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     prelude::Color,
-    style::Stylize,
-    widgets::Widget,
+    style::{Style, Stylize},
+    widgets::{Block, BorderType, Borders, Widget},
     Frame,
 };
 
@@ -25,10 +25,18 @@ struct AppWidget<'a>(&'a AppRenderView<'a>);
 
 impl<'a> AppWidget<'a> {
     fn render_tabs_view(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::LightYellow));
+        let inner_area = block.inner(area);
+        block.render(area, buf);
+
         let file_name_length = self.0.file_name().len() as u16;
+
         let [tabs_area, file_name_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(file_name_length)])
-                .areas(area);
+                .areas(inner_area);
         self.0.tabs().render_content(tabs_area, buf);
         self.0.file_name().green().render(file_name_area, buf);
     }
