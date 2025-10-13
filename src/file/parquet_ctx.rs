@@ -1,11 +1,10 @@
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 
-
 use crate::file::metadata::FileMetadata;
 use crate::file::row_groups::RowGroups;
-use crate::file::schema::FileSchema;
 use crate::file::sample_data::ParquetSampleData;
+use crate::file::schema::FileSchema;
 pub struct ParquetCtx {
     pub file_path: String,
     pub metadata: FileMetadata,

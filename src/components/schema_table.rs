@@ -107,7 +107,7 @@ impl<'a> Widget for FileSchemaTable<'a> {
         let max_scroll = all_headers
             .len()
             .saturating_sub(max_visible_columns as usize);
-        let horizontal_scroll= self.horizontal_scroll.min(max_scroll);
+        let horizontal_scroll = self.horizontal_scroll.min(max_scroll);
 
         // Generate table data with only visible columns and get column widths
         let (visible_rows, column_widths) = self.schema.generate_table_rows_with_columns(
@@ -146,9 +146,9 @@ impl<'a> Widget for FileSchemaTable<'a> {
                 Block::bordered()
                     .title(
                         Line::from(format!("{} (←→ scroll)", self.title))
-                        .centered()
-                        .bold()
-                        .fg(self.title_color),
+                            .centered()
+                            .bold()
+                            .fg(self.title_color),
                     )
                     .border_set(self.border_style),
             );

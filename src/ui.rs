@@ -2,14 +2,17 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     prelude::Color,
-    style::Stylize,
-    widgets::Widget,
+    style::{Style, Stylize},
+    widgets::{Block, BorderType, Borders, Widget},
     Frame,
 };
 
-use crate::file::Renderable;
-use crate::{app::AppRenderView, components::ColumnSizesButterflyChart};
-use crate::{components::DataTable, components::FileSchemaTable, components::SchemaTreeComponent, tabs::{TabType}};
+use crate::{app::AppRenderView, components::RowGroupColumnMetadataComponent};
+use crate::{
+    components::DataTable, components::FileSchemaTable, components::RowGroupMetadata,
+    components::SchemaTreeComponent, tabs::TabType,
+};
+use crate::{components::RowGroupProgressBar, file::Renderable};
 
 pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
@@ -22,10 +25,18 @@ struct AppWidget<'a>(&'a AppRenderView<'a>);
 
 impl<'a> AppWidget<'a> {
     fn render_tabs_view(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::LightYellow));
+        let inner_area = block.inner(area);
+        block.render(area, buf);
+
         let file_name_length = self.0.file_name().len() as u16;
+
         let [tabs_area, file_name_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(file_name_length)])
-                .areas(area);
+                .areas(inner_area);
         self.0.tabs().render_content(tabs_area, buf);
         self.0.file_name().green().render(file_name_area, buf);
     }
@@ -64,15 +75,37 @@ impl<'a> AppWidget<'a> {
     fn render_row_groups_view(&self, area: Rect, buf: &mut Buffer) {
         // render the schema tree
         let tree_width = self.0.parquet_ctx.schema.tree_width() as u16;
-        let [tree_area, sizes_chart_area, _central_area] = Layout::horizontal([
+        let [tree_area, main_area] = Layout::horizontal([
             Constraint::Length(tree_width),
+            // Constraint::Fill(1),
             Constraint::Fill(1),
-            Constraint::Fill(3),
         ])
         .areas(area);
         self.render_schema_tree(tree_area, buf);
 
-        ColumnSizesButterflyChart::new(&self.0.parquet_ctx.schema).render(sizes_chart_area, buf);
+        let [rg_progress, central_area] =
+            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(main_area);
+
+        RowGroupProgressBar::new(
+            &self.0.parquet_ctx.row_groups.row_groups,
+            self.0.row_group_selected(),
+        )
+        .render(rg_progress, buf);
+
+        if let Some(ref column_selected) = self.0.column_selected() {
+            RowGroupColumnMetadataComponent::new(
+                &self.0.parquet_ctx.row_groups.row_groups[self.0.row_group_selected()]
+                    .column_metadata[*column_selected - 1],
+            )
+            .render(central_area, buf);
+        } else {
+            // Display row group level statistics and charts when no column is selected
+            RowGroupMetadata::new(
+                &self.0.parquet_ctx.row_groups.row_groups,
+                self.0.row_group_selected(),
+            )
+            .render(central_area, buf);
+        }
     }
 
     fn render_visualize_view(&self, area: Rect, buf: &mut Buffer) {

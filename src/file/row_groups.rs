@@ -73,7 +73,7 @@ impl RowGroupStats {
         let rg_md: &RowGroupMetaData = reader.metadata().row_group(idx);
         let compressed_size = rg_md.columns().iter().map(|c| c.compressed_size()).sum();
         let uncompressed_size = rg_md.columns().iter().map(|c| c.uncompressed_size()).sum();
-        let compression_ratio = format!("{:.2}", compressed_size as f64 / uncompressed_size as f64);
+        let compression_ratio = format!("{:.2}", uncompressed_size as f64 / compressed_size as f64);
 
         let column_metadata = (0..rg_md.num_columns())
             .map(|col_idx| RowGroupColumnMetadata::from_file_reader(reader, idx, col_idx))
