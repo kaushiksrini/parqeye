@@ -1,5 +1,5 @@
-use datatools::app::App;
-use datatools::file::parquet_ctx::ParquetCtx;
+use parqeye::app::App;
+use parqeye::file::parquet_ctx::ParquetCtx;
 use std::io;
 
 use clap::Parser;

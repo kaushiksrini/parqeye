@@ -990,21 +990,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "datatools"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "chrono",
- "clap",
- "crossterm 0.29.0",
- "itertools 0.14.0",
- "parquet",
- "parquet-format",
- "polars",
- "ratatui",
-]
-
-[[package]]
 name = "debug_unsafe"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2189,6 +2174,21 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "parqeye"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "chrono",
+ "clap",
+ "crossterm 0.29.0",
+ "itertools 0.14.0",
+ "parquet",
+ "parquet-format",
+ "polars",
+ "ratatui",
 ]
 
 [[package]]
