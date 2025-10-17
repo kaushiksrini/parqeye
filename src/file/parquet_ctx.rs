@@ -21,8 +21,8 @@ impl ParquetCtx {
         let row_groups = RowGroups::from_file_reader(&reader)?;
 
         // TODO: async calls?
-        let metadata = FileMetadata::from_metadata(&md)?;
-        let schema = FileSchema::from_metadata(&md)?;
+        let metadata = FileMetadata::from_metadata(md)?;
+        let schema = FileSchema::from_metadata(md)?;
 
         // Read sample data
         let sample_data = ParquetSampleData::read_sample_data(file_path).ok();

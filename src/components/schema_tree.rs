@@ -91,7 +91,7 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
                     // Convert primitive index (1-based) to schema tree index
                     primitive_to_schema_map
                         .get(self.selected_index - 1)
-                        .map_or(false, |&schema_idx| idx == schema_idx)
+                        .is_some_and(|&schema_idx| idx == schema_idx)
                 } else {
                     false
                 };

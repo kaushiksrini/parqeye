@@ -39,7 +39,7 @@ pub enum SchemaInfo {
     Primitive {
         name: String,
         display: String,
-        info: ColumnSchemaInfo,
+        info: Box<ColumnSchemaInfo>,
         stats: ColumnStats,
     },
     Group {
@@ -295,9 +295,7 @@ impl FileSchema {
                         .into_iter()
                         .enumerate()
                         .map(|(idx, content)| {
-                            if idx == 0 {
-                                Cell::from(content.green())
-                            } else if idx == 1 {
+                            if idx == 0 || idx == 1 {
                                 Cell::from(content.green())
                             } else {
                                 Cell::from(content)
@@ -352,7 +350,7 @@ fn traverse(
         lines.push(SchemaInfo::Primitive {
             name: node.name().to_string(),
             display: line,
-            info,
+            info: Box::new(info),
             stats,
         });
 
@@ -415,12 +413,12 @@ fn aggregate_column_stats(
                         Some(distinct.unwrap_or(0) + stats.distinct_count_opt().unwrap_or(0));
 
                     if let Some(min_b) = stats.min_bytes_opt() {
-                        if min_bytes.as_ref().map_or(true, |mb| min_b < &mb[..]) {
+                        if min_bytes.as_ref().is_none_or(|mb| min_b < &mb[..]) {
                             min_bytes = Some(min_b.to_vec());
                         }
                     }
                     if let Some(max_b) = stats.max_bytes_opt() {
-                        if max_bytes.as_ref().map_or(true, |mb| max_b > &mb[..]) {
+                        if max_bytes.as_ref().is_none_or(|mb| max_b > &mb[..]) {
                             max_bytes = Some(max_b.to_vec());
                         }
                     }
@@ -552,7 +550,7 @@ fn logical_type_to_string(logical_type: &LogicalType) -> String {
                 }
             ),
         },
-        _ => format!("{:?}", logical_type),
+        _ => format!("{logical_type:?}"),
     }
 }
 

@@ -9,7 +9,7 @@ pub struct AppRenderView<'a> {
     pub title: &'a str,
     pub parquet_ctx: &'a ParquetCtx,
     file_name: &'a str,
-    tabs: &'a Box<TabManager>,
+    tabs: &'a TabManager,
     pub state: &'a AppState,
 }
 
@@ -25,15 +25,15 @@ impl<'a> AppRenderView<'a> {
     }
 
     pub fn tabs(&self) -> &TabManager {
-        &self.tabs
+        self.tabs
     }
 
     pub fn file_name(&self) -> &str {
-        &self.file_name
+        self.file_name
     }
 
     pub fn state(&self) -> &AppState {
-        &self.state
+        self.state
     }
 }
 
@@ -41,13 +41,19 @@ pub struct App<'a> {
     pub parquet_ctx: &'a ParquetCtx,
     pub file_name: String,
     pub exit: bool,
-    pub tabs: Box<TabManager>,
+    pub tabs: TabManager,
     pub state: AppState,
 }
 
 pub struct AppState {
     pub horizontal_offset: usize,
     pub vertical_offset: usize,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppState {
@@ -90,10 +96,10 @@ impl AppState {
 
 impl<'a> App<'a> {
     pub fn new(file_info: &'a ParquetCtx) -> Self {
-        let tab_manager = Box::new(TabManager::new(
+        let tab_manager = TabManager::new(
             file_info.schema.column_size(),
             file_info.row_groups.num_row_groups(),
-        ));
+        );
 
         Self {
             parquet_ctx: file_info,

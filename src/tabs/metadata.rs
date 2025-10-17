@@ -8,6 +8,12 @@ pub struct MetadataTab {
     pub max_vertical_scroll: Option<usize>,
 }
 
+impl Default for MetadataTab {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetadataTab {
     pub fn new() -> Self {
         Self {

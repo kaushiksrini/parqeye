@@ -8,6 +8,12 @@ pub struct VisualizeTab {
     pub max_vertical_scroll: Option<usize>,
 }
 
+impl Default for VisualizeTab {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VisualizeTab {
     pub fn new() -> Self {
         Self {

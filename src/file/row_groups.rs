@@ -201,15 +201,11 @@ macro_rules! extract_stat_value {
 
 impl RowGroupColumnStats {
     fn new(stats: Option<&Statistics>) -> Option<Self> {
-        if let Some(stats) = stats {
-            Some(Self {
+        stats.map(|stats| Self {
                 min: extract_stat_value!(stats, min_opt),
                 max: extract_stat_value!(stats, max_opt),
                 null_count: stats.null_count_opt(),
                 distinct_count: stats.distinct_count_opt(),
             })
-        } else {
-            None
-        }
     }
 }

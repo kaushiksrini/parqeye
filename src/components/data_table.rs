@@ -170,11 +170,11 @@ impl<'a> Widget for DataTable<'a> {
                     // Truncate cell data if too long (Unicode-safe)
                     let truncated = if cell_data.chars().count() > 23 {
                         let truncated_chars: String = cell_data.chars().take(20).collect();
-                        format!("{}...", truncated_chars)
+                        format!("{truncated_chars}...")
                     } else {
                         cell_data
                     };
-                    Cell::from(format!(" {}", truncated)) // Add space for padding
+                    Cell::from(format!(" {truncated}")) // Add space for padding
                 }));
 
                 let mut row = Row::new(cells);
@@ -203,13 +203,13 @@ impl<'a> Widget for DataTable<'a> {
             } else {
                 header
             };
-            Cell::from(format!(" {}", truncated))
+            Cell::from(format!(" {truncated}"))
                 .bold()
                 .fg(Color::Yellow)
         }));
 
         let scroll_indicator = if max_scroll > 0 {
-            format!(" (←→ scroll {}/{})", horizontal_scroll, max_scroll)
+            format!(" (←→ scroll {horizontal_scroll}/{max_scroll})")
         } else {
             "".to_string()
         };

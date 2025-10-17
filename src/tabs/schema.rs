@@ -8,6 +8,12 @@ pub struct SchemaTab {
     pub max_vertical_scroll: Option<usize>,
 }
 
+impl Default for SchemaTab {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SchemaTab {
     pub fn new() -> Self {
         Self {
@@ -32,15 +38,13 @@ impl Tab for SchemaTab {
         match key_event.code {
             KeyCode::Up if state.vertical_offset() > 0 => state.up(),
             KeyCode::Down
-                if state.vertical_offset()
-                    <= self.max_vertical_scroll.unwrap_or(usize::MAX) - 1 =>
+                if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) =>
             {
                 state.down()
             }
             KeyCode::Left if state.horizontal_offset() > 0 => state.left(),
             KeyCode::Right
-                if state.horizontal_offset()
-                    <= self.max_horizontal_scroll.unwrap_or(usize::MAX) - 1 =>
+                if state.horizontal_offset() < self.max_horizontal_scroll.unwrap_or(usize::MAX) =>
             {
                 state.right()
             }

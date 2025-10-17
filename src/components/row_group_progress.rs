@@ -29,7 +29,7 @@ impl<'a> Widget for RowGroupProgressBar<'a> {
             " Row Group: ".into(),
             format!("{}", self.selected_idx + 1).into(),
             " / ".into(),
-            format!("{}", total_row_groups).into(),
+            format!("{total_row_groups}").into(),
             " ".into(),
         ];
 

@@ -65,7 +65,7 @@ impl ParquetSampleData {
                 if any_value.is_null() {
                     "NULL".to_string()
                 } else {
-                    format!("{}", any_value)
+                    format!("{any_value}")
                 }
             }
             Err(_) => "NULL".to_string(),
