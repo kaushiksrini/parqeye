@@ -57,7 +57,7 @@ impl AppState {
             vertical_offset: 0,
         }
     }
-    
+
     pub fn reset(&mut self) {
         self.horizontal_offset = 0;
         self.vertical_offset = 0;
@@ -90,12 +90,11 @@ impl AppState {
 
 impl<'a> App<'a> {
     pub fn new(file_info: &'a ParquetCtx) -> Self {
-
         let tab_manager = Box::new(TabManager::new(
             file_info.schema.column_size(),
             file_info.row_groups.num_row_groups(),
         ));
-    
+
         Self {
             parquet_ctx: file_info,
             file_name: file_info.file_path.clone(),
@@ -136,7 +135,10 @@ impl<'a> App<'a> {
                 self.state.reset();
             }
             _ => {
-                self.tabs.active_tab().on_event(key_event, &mut self.state).unwrap();
+                self.tabs
+                    .active_tab()
+                    .on_event(key_event, &mut self.state)
+                    .unwrap();
             }
         }
     }

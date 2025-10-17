@@ -31,9 +31,18 @@ impl Tab for VisualizeTab {
     fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error> {
         match key_event.code {
             KeyCode::Up if state.vertical_offset() > 0 => state.up(),
-            KeyCode::Down if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) - 1 => state.down(),
+            KeyCode::Down
+                if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) - 1 =>
+            {
+                state.down()
+            }
             KeyCode::Left if state.horizontal_offset() > 0 => state.left(),
-            KeyCode::Right if state.horizontal_offset() < self.max_horizontal_scroll.unwrap_or(usize::MAX) - 1 => state.right(),
+            KeyCode::Right
+                if state.horizontal_offset()
+                    < self.max_horizontal_scroll.unwrap_or(usize::MAX) - 1 =>
+            {
+                state.right()
+            }
             _ => {}
         }
         Ok(())
@@ -47,7 +56,6 @@ impl Tab for VisualizeTab {
         "Visualize".to_string()
     }
 }
-
 
 // impl Tab for VisualizeTab {
 //     fn on_event(&mut self, event: Event, state: &mut TabState) -> Result<(), io::Error> {

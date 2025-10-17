@@ -1,13 +1,13 @@
 pub mod manager;
-pub mod visualize;
 pub mod metadata;
-pub mod schema;
 pub mod row_groups;
+pub mod schema;
+pub mod visualize;
 
 pub use manager::TabManager;
-pub use visualize::VisualizeTab;
 pub use metadata::MetadataTab;
 pub use schema::SchemaTab;
+pub use visualize::VisualizeTab;
 
 use crate::app::AppState;
 use crossterm::event::KeyEvent;

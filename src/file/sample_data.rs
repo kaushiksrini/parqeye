@@ -24,7 +24,8 @@ impl ParquetSampleData {
         let df = Self::flatten_struct_columns(df)?;
 
         // Get column names
-        let flattened_columns: Vec<String> = df.get_column_names()
+        let flattened_columns: Vec<String> = df
+            .get_column_names()
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -70,5 +71,4 @@ impl ParquetSampleData {
             Err(_) => "NULL".to_string(),
         }
     }
-
 }

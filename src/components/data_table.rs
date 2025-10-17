@@ -5,8 +5,8 @@ use ratatui::{
     prelude::Color,
     style::Stylize,
     symbols::border,
-    widgets::{Block, Borders, Cell, Row, Table, Widget},
     text::Line,
+    widgets::{Block, Borders, Cell, Row, Table, Widget},
 };
 use std::cmp::min;
 
@@ -153,7 +153,7 @@ impl<'a> Widget for DataTable<'a> {
         col_constraints.extend(
             column_widths
                 .iter()
-                .map(|&width| Constraint::Length(width as u16))
+                .map(|&width| Constraint::Length(width as u16)),
         );
 
         // Create table rows with row numbers
@@ -162,25 +162,20 @@ impl<'a> Widget for DataTable<'a> {
             .enumerate()
             .map(|(row_idx, row_data)| {
                 // Create cells with row number first
-                let mut cells: Vec<Cell> = vec![
-                    Cell::from(format!("{:>4}", row_idx + 1))
-                        .fg(Color::DarkGray)
-                ];
-                
+                let mut cells: Vec<Cell> =
+                    vec![Cell::from(format!("{:>4}", row_idx + 1)).fg(Color::DarkGray)];
+
                 // Add data cells
-                cells.extend(row_data
-                    .into_iter()
-                    .map(|cell_data| {
-                        // Truncate cell data if too long (Unicode-safe)
-                        let truncated = if cell_data.chars().count() > 23 {
-                            let truncated_chars: String = cell_data.chars().take(20).collect();
-                            format!("{}...", truncated_chars)
-                        } else {
-                            cell_data
-                        };
-                        Cell::from(format!(" {}", truncated)) // Add space for padding
-                    })
-                );
+                cells.extend(row_data.into_iter().map(|cell_data| {
+                    // Truncate cell data if too long (Unicode-safe)
+                    let truncated = if cell_data.chars().count() > 23 {
+                        let truncated_chars: String = cell_data.chars().take(20).collect();
+                        format!("{}...", truncated_chars)
+                    } else {
+                        cell_data
+                    };
+                    Cell::from(format!(" {}", truncated)) // Add space for padding
+                }));
 
                 let mut row = Row::new(cells);
 
@@ -200,25 +195,18 @@ impl<'a> Widget for DataTable<'a> {
             .collect();
 
         // Create header row with empty cell for row number column
-        let mut header_cells: Vec<Cell> = vec![
-            Cell::from("    ")
-                .fg(Color::DarkGray)
-        ];
-        
-        header_cells.extend(
-            visible_headers
-                .into_iter()
-                .map(|header| {
-                    let truncated = if header.len() > 20 {
-                        format!("{}...", &header[..17])
-                    } else {
-                        header
-                    };
-                    Cell::from(format!(" {}", truncated))
-                        .bold()
-                        .fg(Color::Yellow)
-                })
-        );
+        let mut header_cells: Vec<Cell> = vec![Cell::from("    ").fg(Color::DarkGray)];
+
+        header_cells.extend(visible_headers.into_iter().map(|header| {
+            let truncated = if header.len() > 20 {
+                format!("{}...", &header[..17])
+            } else {
+                header
+            };
+            Cell::from(format!(" {}", truncated))
+                .bold()
+                .fg(Color::Yellow)
+        }));
 
         let scroll_indicator = if max_scroll > 0 {
             format!(" (←→ scroll {}/{})", horizontal_scroll, max_scroll)
@@ -226,10 +214,8 @@ impl<'a> Widget for DataTable<'a> {
             "".to_string()
         };
 
-        let [header_area, content_area] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Fill(1),
-        ]).areas(area);
+        let [header_area, content_area] =
+            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
         // Create header as a single-row table
         let header_widget = Table::new(vec![Row::new(header_cells)], col_constraints.clone())
@@ -238,16 +224,16 @@ impl<'a> Widget for DataTable<'a> {
                 Block::bordered()
                     .borders(Borders::BOTTOM | Borders::TOP)
                     .border_set(self.border_style)
-                    .title(Line::from(format!("{}{}", self.title, scroll_indicator))
+                    .title(
+                        Line::from(format!("{}{}", self.title, scroll_indicator))
                             .centered()
                             .bold()
                             .fg(self.title_color),
-                    )
+                    ),
             );
 
         // Create data table without header
-        let table_widget = Table::new(table_rows, col_constraints)
-            .column_spacing(2);
+        let table_widget = Table::new(table_rows, col_constraints).column_spacing(2);
 
         header_widget.render(header_area, buf);
         table_widget.render(content_area, buf);

@@ -5,12 +5,11 @@ use ratatui::text::Line;
 use ratatui::widgets::Tabs;
 use ratatui::widgets::Widget;
 
-use crate::tabs::visualize::VisualizeTab;
 use crate::tabs::metadata::MetadataTab;
-use crate::tabs::schema::SchemaTab;
 use crate::tabs::row_groups::RowGroupsTab;
+use crate::tabs::schema::SchemaTab;
+use crate::tabs::visualize::VisualizeTab;
 use crate::tabs::Tab;
-
 
 pub struct TabManager {
     pub tabs: Vec<Box<dyn Tab>>,
@@ -22,18 +21,26 @@ impl TabManager {
     pub fn new(num_columns: usize, num_row_groups: usize) -> Self {
         Self {
             tabs: vec![
-                Box::new(VisualizeTab::new()
-                    .with_max_horizontal_scroll(num_columns)
-                    .with_max_vertical_scroll(num_row_groups)),
-                Box::new(MetadataTab::new()
-                    .with_max_horizontal_scroll(num_columns)
-                    .with_max_vertical_scroll(num_row_groups)),
-                Box::new(SchemaTab::new()
-                    .with_max_horizontal_scroll(num_row_groups)
-                    .with_max_vertical_scroll(num_columns)),
-                Box::new(RowGroupsTab::new()
-                    .with_max_horizontal_scroll(num_row_groups)
-                    .with_max_vertical_scroll(num_columns)),
+                Box::new(
+                    VisualizeTab::new()
+                        .with_max_horizontal_scroll(num_columns)
+                        .with_max_vertical_scroll(num_row_groups),
+                ),
+                Box::new(
+                    MetadataTab::new()
+                        .with_max_horizontal_scroll(num_columns)
+                        .with_max_vertical_scroll(num_row_groups),
+                ),
+                Box::new(
+                    SchemaTab::new()
+                        .with_max_horizontal_scroll(num_row_groups)
+                        .with_max_vertical_scroll(num_columns),
+                ),
+                Box::new(
+                    RowGroupsTab::new()
+                        .with_max_horizontal_scroll(num_row_groups)
+                        .with_max_vertical_scroll(num_columns),
+                ),
             ],
             active_tab: 0,
             title: "Tabs".to_string(),
@@ -56,7 +63,6 @@ impl TabManager {
         &self.tabs[self.active_tab]
     }
 }
-
 
 impl Renderable for TabManager {
     fn render_content(&self, area: Rect, buf: &mut Buffer) {

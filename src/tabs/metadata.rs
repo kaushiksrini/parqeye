@@ -1,14 +1,12 @@
-use crossterm::event::{KeyEvent};
+use crossterm::event::KeyEvent;
 use std::io;
 
 use crate::{app::AppState, tabs::Tab};
-
 
 pub struct MetadataTab {
     pub max_horizontal_scroll: Option<usize>,
     pub max_vertical_scroll: Option<usize>,
 }
-
 
 impl MetadataTab {
     pub fn new() -> Self {
@@ -28,7 +26,6 @@ impl MetadataTab {
         self
     }
 }
-
 
 impl Tab for MetadataTab {
     #[allow(unused_variables)]
