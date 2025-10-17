@@ -102,6 +102,7 @@ impl<'a> AppWidget<'a> {
             // Display row group level statistics and charts when no column is selected
             RowGroupMetadata::new(
                 &self.0.parquet_ctx.row_groups.row_groups,
+                &self.0.parquet_ctx.row_groups.avg_median_stats,
                 self.0.state().horizontal_offset(),
             )
             .render(central_area, buf);
