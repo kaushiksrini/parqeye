@@ -33,12 +33,11 @@ impl TabManager {
                 ),
                 Box::new(
                     SchemaTab::new()
-                        .with_max_horizontal_scroll(num_row_groups)
                         .with_max_vertical_scroll(num_columns),
                 ),
                 Box::new(
                     RowGroupsTab::new()
-                        .with_max_horizontal_scroll(num_row_groups)
+                        .with_max_horizontal_scroll(num_row_groups - 1)
                         .with_max_vertical_scroll(num_columns),
                 ),
             ],
