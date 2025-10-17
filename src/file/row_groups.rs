@@ -54,6 +54,10 @@ impl RowGroups {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { row_groups })
     }
+
+    pub fn num_row_groups(&self) -> usize {
+        self.row_groups.len()
+    }
 }
 
 pub struct RowGroupStats {

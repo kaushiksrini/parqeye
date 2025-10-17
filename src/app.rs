@@ -3,17 +3,14 @@ use ratatui::DefaultTerminal;
 use std::io;
 
 use crate::file::parquet_ctx::ParquetCtx;
-use crate::tabs::{TabManager, TabType};
-use std::cmp::max;
+use crate::tabs::TabManager;
 
 pub struct AppRenderView<'a> {
     pub title: &'a str,
     pub parquet_ctx: &'a ParquetCtx,
     file_name: &'a str,
-    tabs: &'a TabManager,
-    column_selected: Option<usize>,
-    row_group_selected: usize,
-    pub horizontal_scroll: usize,
+    tabs: &'a Box<TabManager>,
+    pub state: &'a AppState,
 }
 
 impl<'a> AppRenderView<'a> {
@@ -23,9 +20,7 @@ impl<'a> AppRenderView<'a> {
             parquet_ctx: app.parquet_ctx,
             file_name: &app.file_name,
             tabs: &app.tabs,
-            column_selected: app.column_selected,
-            row_group_selected: app.row_group_selected,
-            horizontal_scroll: app.horizontal_scroll,
+            state: &app.state,
         }
     }
 
@@ -37,12 +32,8 @@ impl<'a> AppRenderView<'a> {
         &self.file_name
     }
 
-    pub fn column_selected(&self) -> &Option<usize> {
-        &self.column_selected
-    }
-
-    pub fn row_group_selected(&self) -> usize {
-        self.row_group_selected
+    pub fn state(&self) -> &AppState {
+        &self.state
     }
 }
 
@@ -50,24 +41,67 @@ pub struct App<'a> {
     pub parquet_ctx: &'a ParquetCtx,
     pub file_name: String,
     pub exit: bool,
-    pub tabs: TabManager,
-    pub column_selected: Option<usize>,
-    pub scroll_offset: usize,
-    pub row_group_selected: usize,
-    pub horizontal_scroll: usize,
+    pub tabs: Box<TabManager>,
+    pub state: AppState,
+}
+
+pub struct AppState {
+    pub horizontal_offset: usize,
+    pub vertical_offset: usize,
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            horizontal_offset: 0,
+            vertical_offset: 0,
+        }
+    }
+    
+    pub fn reset(&mut self) {
+        self.horizontal_offset = 0;
+        self.vertical_offset = 0;
+    }
+
+    pub fn horizontal_offset(&self) -> usize {
+        self.horizontal_offset
+    }
+
+    pub fn vertical_offset(&self) -> usize {
+        self.vertical_offset
+    }
+
+    pub fn down(&mut self) {
+        self.vertical_offset += 1;
+    }
+
+    pub fn up(&mut self) {
+        self.vertical_offset = self.vertical_offset.saturating_sub(1);
+    }
+
+    pub fn right(&mut self) {
+        self.horizontal_offset += 1;
+    }
+
+    pub fn left(&mut self) {
+        self.horizontal_offset = self.horizontal_offset.saturating_sub(1);
+    }
 }
 
 impl<'a> App<'a> {
     pub fn new(file_info: &'a ParquetCtx) -> Self {
+
+        let tab_manager = Box::new(TabManager::new(
+            file_info.schema.column_size(),
+            file_info.row_groups.num_row_groups(),
+        ));
+    
         Self {
             parquet_ctx: file_info,
             file_name: file_info.file_path.clone(),
             exit: false,
-            tabs: TabManager::new(),
-            column_selected: None,
-            scroll_offset: 0,
-            row_group_selected: 0,
-            horizontal_scroll: 0,
+            tabs: tab_manager,
+            state: AppState::new(),
         }
     }
 
@@ -95,52 +129,15 @@ impl<'a> App<'a> {
             KeyCode::Char('q') => self.exit(),
             KeyCode::Tab => {
                 self.tabs.next();
-                self.horizontal_scroll = 0;
+                self.state.reset();
             }
             KeyCode::BackTab => {
                 self.tabs.prev();
-                self.horizontal_scroll = 0;
+                self.state.reset();
             }
-            KeyCode::Down => {
-                let total_columns: usize = self.parquet_ctx.schema.column_size();
-                match self.tabs.active_tab() {
-                    TabType::Schema | TabType::RowGroups => {
-                        if let Some(idx) = self.column_selected {
-                            if idx + 1 <= total_columns {
-                                self.column_selected = Some(idx + 1);
-                            }
-                        } else {
-                            self.column_selected = Some(1);
-                        }
-                    }
-                    _ => {}
-                }
+            _ => {
+                self.tabs.active_tab().on_event(key_event, &mut self.state).unwrap();
             }
-            KeyCode::Up => match self.tabs.active_tab() {
-                TabType::Schema | TabType::RowGroups => {
-                    if let Some(idx) = self.column_selected {
-                        if idx > 1 {
-                            self.column_selected = Some(idx - 1);
-                        } else {
-                            self.column_selected = None;
-                        }
-                    }
-                }
-                _ => {}
-            },
-            KeyCode::Right => match self.tabs.active_tab() {
-                TabType::Schema | TabType::Visualize => {
-                    self.horizontal_scroll += 1;
-                }
-                _ => {}
-            },
-            KeyCode::Left => match self.tabs.active_tab() {
-                TabType::Schema | TabType::Visualize => {
-                    self.horizontal_scroll = max(0, self.horizontal_scroll.saturating_sub(1));
-                }
-                _ => {}
-            },
-            _ => {}
         }
     }
 

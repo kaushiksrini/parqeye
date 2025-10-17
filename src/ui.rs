@@ -10,7 +10,7 @@ use ratatui::{
 use crate::{app::AppRenderView, components::RowGroupColumnMetadataComponent};
 use crate::{
     components::DataTable, components::FileSchemaTable, components::RowGroupMetadata,
-    components::SchemaTreeComponent, tabs::TabType,
+    components::SchemaTreeComponent,
 };
 use crate::{components::RowGroupProgressBar, file::Renderable};
 
@@ -60,15 +60,15 @@ impl<'a> AppWidget<'a> {
 
         // Render the schema table with selection highlighting
         FileSchemaTable::new(&self.0.parquet_ctx.schema)
-            .with_selected_index(*self.0.column_selected())
-            .with_horizontal_scroll(self.0.horizontal_scroll)
+            .with_selected_index(self.0.state().vertical_offset())
+            .with_horizontal_scroll(self.0.state().horizontal_offset())
             .render(central_area, buf);
     }
 
     fn render_schema_tree(&self, area: Rect, buf: &mut Buffer) {
         SchemaTreeComponent::new(&self.0.parquet_ctx.schema.columns)
             .with_title("Schema Tree".to_string())
-            .with_selected_index(*self.0.column_selected())
+            .with_selected_index(self.0.state().vertical_offset())
             .render(area, buf);
     }
 
@@ -88,21 +88,21 @@ impl<'a> AppWidget<'a> {
 
         RowGroupProgressBar::new(
             &self.0.parquet_ctx.row_groups.row_groups,
-            self.0.row_group_selected(),
+            self.0.state().horizontal_offset(),
         )
         .render(rg_progress, buf);
 
-        if let Some(ref column_selected) = self.0.column_selected() {
+        if self.0.state().vertical_offset() > 0 {
             RowGroupColumnMetadataComponent::new(
-                &self.0.parquet_ctx.row_groups.row_groups[self.0.row_group_selected()]
-                    .column_metadata[*column_selected - 1],
+                &self.0.parquet_ctx.row_groups.row_groups[self.0.state().horizontal_offset()]
+                    .column_metadata[self.0.state().vertical_offset() - 1],
             )
             .render(central_area, buf);
         } else {
             // Display row group level statistics and charts when no column is selected
             RowGroupMetadata::new(
                 &self.0.parquet_ctx.row_groups.row_groups,
-                self.0.row_group_selected(),
+                self.0.state().horizontal_offset(),
             )
             .render(central_area, buf);
         }
@@ -111,7 +111,7 @@ impl<'a> AppWidget<'a> {
     fn render_visualize_view(&self, area: Rect, buf: &mut Buffer) {
         if let Some(ref sample_data) = self.0.parquet_ctx.sample_data {
             DataTable::new(sample_data)
-                .with_horizontal_scroll(self.0.horizontal_scroll)
+                .with_horizontal_scroll(self.0.state().horizontal_offset())
                 .render(area, buf);
         } else {
             "No sample data available - failed to read parquet file data.".render(area, buf);
@@ -133,19 +133,12 @@ impl<'a> Widget for AppWidget<'a> {
         self.render_tabs_view(header_area, buf);
         self.render_footer_view(footer_area, buf);
 
-        match app.tabs().active_tab() {
-            TabType::Metadata => {
-                self.render_metadata_view(inner_area, buf);
-            }
-            TabType::Schema => {
-                self.render_schema_view(inner_area, buf);
-            }
-            TabType::RowGroups => {
-                self.render_row_groups_view(inner_area, buf);
-            }
-            TabType::Visualize => {
-                self.render_visualize_view(inner_area, buf);
-            }
+        match app.tabs().active_tab().to_owned().to_string().as_str() {
+            "Metadata" => self.render_metadata_view(inner_area, buf),
+            "Schema" => self.render_schema_view(inner_area, buf),
+            "Row Groups" => self.render_row_groups_view(inner_area, buf),
+            "Visualize" => self.render_visualize_view(inner_area, buf),
+            _ => {}
         }
     }
 }

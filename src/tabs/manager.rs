@@ -1,43 +1,39 @@
+use crate::file::Renderable;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::Tabs;
 use ratatui::widgets::Widget;
 
-use crate::file::Renderable;
+use crate::tabs::visualize::VisualizeTab;
+use crate::tabs::metadata::MetadataTab;
+use crate::tabs::schema::SchemaTab;
+use crate::tabs::row_groups::RowGroupsTab;
+use crate::tabs::Tab;
 
-pub enum TabType {
-    Visualize,
-    Metadata,
-    Schema,
-    RowGroups,
-}
-
-impl std::fmt::Display for TabType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TabType::Visualize => write!(f, "Visualize"),
-            TabType::Metadata => write!(f, "Metadata"),
-            TabType::Schema => write!(f, "Schema"),
-            TabType::RowGroups => write!(f, "Row Groups"),
-        }
-    }
-}
 
 pub struct TabManager {
-    pub tabs: Vec<TabType>,
+    pub tabs: Vec<Box<dyn Tab>>,
     pub active_tab: usize,
     pub title: String,
 }
 
 impl TabManager {
-    pub fn new() -> Self {
+    pub fn new(num_columns: usize, num_row_groups: usize) -> Self {
         Self {
             tabs: vec![
-                TabType::Visualize,
-                TabType::Metadata,
-                TabType::Schema,
-                TabType::RowGroups,
+                Box::new(VisualizeTab::new()
+                    .with_max_horizontal_scroll(num_columns)
+                    .with_max_vertical_scroll(num_row_groups)),
+                Box::new(MetadataTab::new()
+                    .with_max_horizontal_scroll(num_columns)
+                    .with_max_vertical_scroll(num_row_groups)),
+                Box::new(SchemaTab::new()
+                    .with_max_horizontal_scroll(num_row_groups)
+                    .with_max_vertical_scroll(num_columns)),
+                Box::new(RowGroupsTab::new()
+                    .with_max_horizontal_scroll(num_row_groups)
+                    .with_max_vertical_scroll(num_columns)),
             ],
             active_tab: 0,
             title: "Tabs".to_string(),
@@ -56,15 +52,11 @@ impl TabManager {
         }
     }
 
-    pub fn active_tab(&self) -> &TabType {
+    pub fn active_tab(&self) -> &Box<dyn Tab> {
         &self.tabs[self.active_tab]
     }
-
-    pub fn with_selected_tab(mut self, active_tab: usize) -> Self {
-        self.active_tab = active_tab;
-        self
-    }
 }
+
 
 impl Renderable for TabManager {
     fn render_content(&self, area: Rect, buf: &mut Buffer) {

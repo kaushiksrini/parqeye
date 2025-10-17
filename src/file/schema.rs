@@ -200,7 +200,7 @@ impl FileSchema {
 
     pub fn generate_table_rows_with_columns(
         &self,
-        selected_index: Option<usize>,
+        selected_index: usize,
         start_col: usize,
         num_cols: usize,
     ) -> (Vec<Row>, Vec<usize>) {
@@ -222,7 +222,7 @@ impl FileSchema {
                         "N/A".to_string()
                     };
 
-                    let is_selected = selected_index == Some(primitive_index);
+                    let is_selected = selected_index > 0 && selected_index == primitive_index;
 
                     // Create all cells first
                     let all_cells = vec![

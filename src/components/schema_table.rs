@@ -14,7 +14,7 @@ use crate::file::Renderable;
 
 pub struct FileSchemaTable<'a> {
     pub schema: &'a FileSchema,
-    pub selected_index: Option<usize>,
+    pub selected_index: usize,
     pub title: String,
     pub title_color: Color,
     pub selected_color: Color,
@@ -26,7 +26,7 @@ impl<'a> FileSchemaTable<'a> {
     pub fn new(schema: &'a FileSchema) -> Self {
         Self {
             schema,
-            selected_index: None,
+            selected_index: 0,
             title: "Column Statistics".to_string(),
             title_color: Color::Green,
             selected_color: Color::Yellow,
@@ -35,7 +35,7 @@ impl<'a> FileSchemaTable<'a> {
         }
     }
 
-    pub fn with_selected_index(mut self, index: Option<usize>) -> Self {
+    pub fn with_selected_index(mut self, index: usize) -> Self {
         self.selected_index = index;
         self
     }

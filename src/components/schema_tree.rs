@@ -10,7 +10,7 @@ use ratatui::{
 
 pub struct SchemaTreeComponent<'a> {
     pub schema_columns: &'a Vec<SchemaInfo>,
-    pub selected_index: Option<usize>,
+    pub selected_index: usize,
     pub title: String,
     pub title_color: Color,
     pub root_color: Color,
@@ -25,7 +25,7 @@ impl<'a> SchemaTreeComponent<'a> {
     pub fn new(schema_columns: &'a Vec<SchemaInfo>) -> Self {
         Self {
             schema_columns,
-            selected_index: None,
+            selected_index: 0,
             title: "Schema Tree".to_string(),
             title_color: Color::Yellow,
             root_color: Color::DarkGray,
@@ -37,7 +37,7 @@ impl<'a> SchemaTreeComponent<'a> {
         }
     }
 
-    pub fn with_selected_index(mut self, index: Option<usize>) -> Self {
+    pub fn with_selected_index(mut self, index: usize) -> Self {
         self.selected_index = index;
         self
     }
@@ -87,15 +87,11 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
             .iter()
             .enumerate()
             .map(|(idx, line)| {
-                let is_selected = if let Some(selected_primitive_idx) = self.selected_index {
-                    // Convert primitive index to schema tree index
-                    if let Some(&schema_idx) =
-                        primitive_to_schema_map.get(selected_primitive_idx.saturating_sub(1))
-                    {
-                        idx == schema_idx
-                    } else {
-                        false
-                    }
+                let is_selected = if self.selected_index > 0 {
+                    // Convert primitive index (1-based) to schema tree index
+                    primitive_to_schema_map
+                        .get(self.selected_index - 1)
+                        .map_or(false, |&schema_idx| idx == schema_idx)
                 } else {
                     false
                 };
@@ -131,7 +127,7 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
                 "Group".fg(self.group_color),
             ];
 
-            if self.selected_index.is_some() {
+            if self.selected_index > 0 {
                 legend_vec.extend(vec![", ".into(), "Selected".bold().fg(self.selected_color)]);
             }
 
