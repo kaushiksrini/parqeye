@@ -85,7 +85,8 @@ impl<'a> FileSchemaTable<'a> {
 
 impl<'a> Widget for FileSchemaTable<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let all_headers = ["Repetition",
+        let all_headers = [
+            "Repetition",
             "Physical",
             "Compressed",
             "Uncompressed",
@@ -94,7 +95,8 @@ impl<'a> Widget for FileSchemaTable<'a> {
             "Compression",
             "Min",
             "Max",
-            "Nulls"];
+            "Nulls",
+        ];
 
         // Calculate how many columns we can show at full width
         let available_width = area.width.saturating_sub(4); // Account for borders and spacing

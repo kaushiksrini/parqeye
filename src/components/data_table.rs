@@ -203,9 +203,7 @@ impl<'a> Widget for DataTable<'a> {
             } else {
                 header
             };
-            Cell::from(format!(" {truncated}"))
-                .bold()
-                .fg(Color::Yellow)
+            Cell::from(format!(" {truncated}")).bold().fg(Color::Yellow)
         }));
 
         let scroll_indicator = if max_scroll > 0 {

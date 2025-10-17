@@ -24,8 +24,7 @@ fn main() -> io::Result<()> {
 fn tui(path: &str) -> io::Result<()> {
     let mut terminal = ratatui::init();
 
-    let file_info = ParquetCtx::from_file(path)
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    let file_info = ParquetCtx::from_file(path).map_err(|e| io::Error::other(e.to_string()))?;
 
     let mut app = App::new(&file_info);
     app.run(&mut terminal)?;
