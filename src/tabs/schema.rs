@@ -61,13 +61,13 @@ impl Tab for SchemaTab {
             "/".white(),
             "→".blue(),
             " : ".into(),
-            "Toggle Table".into(),
+            "Scroll".into(),
             ", ".into(),
             "↑".green(),
             "/".white(),
             "↓".blue(),
             " : ".into(),
-            "Columns".into(),
+            "Schema".into(),
         ]
     }
 

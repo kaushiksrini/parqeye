@@ -145,7 +145,7 @@ impl<'a> Widget for FileSchemaTable<'a> {
             .block(
                 Block::bordered()
                     .title(
-                        Line::from(format!("{} (←→ scroll)", self.title))
+                        Line::from(self.title.clone())
                             .centered()
                             .bold()
                             .fg(self.title_color),
