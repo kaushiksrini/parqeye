@@ -2,6 +2,7 @@ use crossterm::event::KeyEvent;
 use std::io;
 
 use crate::{app::AppState, tabs::Tab};
+use ratatui::text::Span;
 
 pub struct MetadataTab {
     pub max_horizontal_scroll: Option<usize>,
@@ -39,8 +40,8 @@ impl Tab for MetadataTab {
         Ok(())
     }
 
-    fn instructions(&self) -> String {
-        todo!()
+    fn instructions(&self) -> Vec<Span<'static>> {
+        vec![]
     }
 
     fn to_string(&self) -> String {

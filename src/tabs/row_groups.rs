@@ -1,7 +1,8 @@
-use crossterm::event::{KeyCode, KeyEvent};
-use std::io;
-
 use crate::{app::AppState, tabs::Tab};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::style::Stylize;
+use ratatui::text::Span;
+use std::io;
 
 pub struct RowGroupsTab {
     pub max_horizontal_scroll: Option<usize>,
@@ -53,8 +54,20 @@ impl Tab for RowGroupsTab {
         Ok(())
     }
 
-    fn instructions(&self) -> String {
-        todo!()
+    fn instructions(&self) -> Vec<Span<'static>> {
+        vec![
+            "→".green(),
+            "/".white(),
+            "←".blue(),
+            " : ".into(),
+            "Iterate Row Groups".into(),
+            ", ".into(),
+            "↑".green(),
+            "/".white(),
+            "↓".blue(),
+            " : ".into(),
+            "Schema".into(),
+        ]
     }
 
     fn to_string(&self) -> String {

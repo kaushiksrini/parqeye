@@ -42,7 +42,12 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_footer_view(&self, area: Rect, buf: &mut Buffer) {
-        self.0.title.bold().fg(Color::Green).render(area, buf);
+        let title_width = self.0.title.len() as u16;
+        let [title_area, footer_area] =
+            Layout::horizontal([Constraint::Length(title_width), Constraint::Fill(1)]).areas(area);
+        self.0.title.bold().fg(Color::Green).render(title_area, buf);
+
+        self.0.tabs().render_instructions(footer_area, buf);
     }
 
     fn render_metadata_view(&self, area: Rect, buf: &mut Buffer) {

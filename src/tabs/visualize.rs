@@ -1,4 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::style::Stylize;
+use ratatui::text::Span;
 use std::io;
 
 use crate::{app::AppState, tabs::Tab};
@@ -54,8 +56,14 @@ impl Tab for VisualizeTab {
         Ok(())
     }
 
-    fn instructions(&self) -> String {
-        todo!()
+    fn instructions(&self) -> Vec<Span<'static>> {
+        vec![
+            "→".green(),
+            "/".white(),
+            "←".blue(),
+            " : ".into(),
+            "Navigate".into(),
+        ]
     }
 
     fn to_string(&self) -> String {
