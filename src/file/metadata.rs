@@ -12,9 +12,9 @@ use ratatui::{
 };
 use std::collections::{HashMap, HashSet};
 
+use crate::file::Renderable;
 use crate::file::utils::commas;
 use crate::file::utils::human_readable_bytes;
-use crate::file::Renderable;
 
 #[derive(Debug)]
 pub struct FileMetadata {

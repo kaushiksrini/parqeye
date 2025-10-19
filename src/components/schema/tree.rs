@@ -11,6 +11,7 @@ use ratatui::{
 pub struct SchemaTreeComponent<'a> {
     pub schema_columns: &'a Vec<SchemaInfo>,
     pub selected_index: usize,
+    pub scroll_offset: usize,
     pub title: String,
     pub title_color: Color,
     pub root_color: Color,
@@ -26,6 +27,7 @@ impl<'a> SchemaTreeComponent<'a> {
         Self {
             schema_columns,
             selected_index: 0,
+            scroll_offset: 0,
             title: "Schema Tree".to_string(),
             title_color: Color::Yellow,
             root_color: Color::DarkGray,
@@ -39,6 +41,11 @@ impl<'a> SchemaTreeComponent<'a> {
 
     pub fn with_selected_index(mut self, index: usize) -> Self {
         self.selected_index = index;
+        self
+    }
+
+    pub fn with_scroll_offset(mut self, offset: usize) -> Self {
+        self.scroll_offset = offset;
         self
     }
 
@@ -82,10 +89,17 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
             .filter_map(|(idx, line)| matches!(line, SchemaInfo::Primitive { .. }).then_some(idx))
             .collect();
 
+        // Calculate visible range based on scroll offset and available height
+        let visible_height = area.height.saturating_sub(1) as usize; // Account for borders + legend
+        let start_idx = self.scroll_offset;
+        let end_idx = (start_idx + visible_height).min(self.schema_columns.len());
+
         let items: Vec<ListItem> = self
             .schema_columns
             .iter()
             .enumerate()
+            .skip(start_idx)
+            .take(end_idx - start_idx)
             .map(|(idx, line)| {
                 let is_selected = if self.selected_index > 0 {
                     // Convert primitive index (1-based) to schema tree index

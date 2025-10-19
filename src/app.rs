@@ -46,8 +46,9 @@ pub struct App<'a> {
 }
 
 pub struct AppState {
-    pub horizontal_offset: usize,
-    pub vertical_offset: usize,
+    horizontal_offset: usize,
+    vertical_offset: usize,
+    tree_scroll_offset: usize,
 }
 
 impl Default for AppState {
@@ -61,12 +62,14 @@ impl AppState {
         Self {
             horizontal_offset: 0,
             vertical_offset: 0,
+            tree_scroll_offset: 0,
         }
     }
 
     pub fn reset(&mut self) {
         self.horizontal_offset = 0;
         self.vertical_offset = 0;
+        self.tree_scroll_offset = 0;
     }
 
     pub fn horizontal_offset(&self) -> usize {
@@ -91,6 +94,18 @@ impl AppState {
 
     pub fn left(&mut self) {
         self.horizontal_offset = self.horizontal_offset.saturating_sub(1);
+    }
+
+    pub fn tree_scroll_offset(&self) -> usize {
+        self.tree_scroll_offset
+    }
+
+    pub fn tree_scroll_up(&mut self) {
+        self.tree_scroll_offset = self.tree_scroll_offset.saturating_sub(1);
+    }
+
+    pub fn tree_scroll_down(&mut self) {
+        self.tree_scroll_offset += 1;
     }
 }
 

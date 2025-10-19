@@ -206,13 +206,33 @@ impl FileSchema {
         start_col: usize,
         num_cols: usize,
     ) -> (Vec<Row>, Vec<usize>) {
+        self.generate_table_rows_with_scroll(
+            selected_index,
+            start_col,
+            num_cols,
+            0,
+            self.columns.len(),
+        )
+    }
+
+    pub fn generate_table_rows_with_scroll(
+        &self,
+        selected_index: usize,
+        start_col: usize,
+        num_cols: usize,
+        start_row: usize,
+        num_rows: usize,
+    ) -> (Vec<Row>, Vec<usize>) {
         let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
         let mut column_widths = vec![0usize; num_cols];
 
         let rows = self
             .columns
             .iter()
-            .filter_map(|col| {
+            .enumerate()
+            .skip(start_row + 1)
+            .take(num_rows)
+            .filter_map(|(_col_idx, col)| {
                 if let SchemaInfo::Primitive { info, stats, .. } = col {
                     let compression_ratio = if stats.total_uncompressed_size > 0 {
                         format!(
@@ -224,7 +244,8 @@ impl FileSchema {
                         "N/A".to_string()
                     };
 
-                    let is_selected = selected_index > 0 && selected_index == primitive_index;
+                    let is_selected =
+                        selected_index > 0 && (selected_index - start_row) == primitive_index;
 
                     // Create all cells first
                     let all_cells = vec![

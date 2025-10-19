@@ -289,11 +289,13 @@ impl<'a> RowGroupMetadata<'a> {
             .map(|(_, ratio)| *ratio)
             .fold(0.0, f64::max);
 
-        let datasets = vec![Dataset::default()
-            .name("Compression Ratio")
-            .marker(Marker::Dot)
-            .style(Style::default().fg(Color::Yellow))
-            .data(&ratio_data)];
+        let datasets = vec![
+            Dataset::default()
+                .name("Compression Ratio")
+                .marker(Marker::Dot)
+                .style(Style::default().fg(Color::Yellow))
+                .data(&ratio_data),
+        ];
 
         let x_labels = self.make_x_labels();
 

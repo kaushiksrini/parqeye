@@ -1,16 +1,16 @@
 use ratatui::{
+    Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     prelude::Color,
     style::{Style, Stylize},
     widgets::{Block, BorderType, Borders, Widget},
-    Frame,
 };
 
 use crate::app::AppRenderView;
 use crate::components::{
     DataTable, FileSchemaTable, RowGroupColumnMetadataComponent, RowGroupMetadata,
-    RowGroupProgressBar, SchemaTreeComponent,
+    RowGroupProgressBar, SchemaTreeComponent, ScrollbarComponent,
 };
 use crate::file::Renderable;
 
@@ -24,6 +24,113 @@ where
 struct AppWidget<'a>(&'a AppRenderView<'a>);
 
 impl<'a> AppWidget<'a> {
+    // Helper function to calculate the tree index of the selected primitive column
+    fn calculate_selected_tree_index(&self, vertical_offset: usize) -> Option<usize> {
+        if vertical_offset == 0 {
+            return None;
+        }
+
+        let primitive_to_schema_map: Vec<usize> = self
+            .0
+            .parquet_ctx
+            .schema
+            .columns
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, line)| {
+                matches!(line, crate::file::schema::SchemaInfo::Primitive { .. }).then_some(idx)
+            })
+            .collect();
+
+        primitive_to_schema_map.get(vertical_offset - 1).copied()
+    }
+
+    // Helper function to calculate adjusted scroll offset to keep selected item visible
+    fn calculate_scroll_to_show_item(
+        &self,
+        selected_tree_idx: Option<usize>,
+        current_scroll: usize,
+        visible_items: usize,
+    ) -> usize {
+        match selected_tree_idx {
+            Some(idx) => {
+                // Ensure selected item is visible
+                if idx < current_scroll {
+                    idx
+                } else if idx >= current_scroll + visible_items {
+                    idx.saturating_sub(visible_items - 1)
+                } else {
+                    current_scroll
+                }
+            }
+            None => current_scroll,
+        }
+    }
+
+    // Calculate the adjusted scroll offset for the schema tree
+    fn calculate_adjusted_scroll_offset(&self, visible_tree_items: usize) -> usize {
+        let selected_tree_idx =
+            self.calculate_selected_tree_index(self.0.state().vertical_offset());
+        self.calculate_scroll_to_show_item(
+            selected_tree_idx,
+            self.0.state().tree_scroll_offset(),
+            visible_tree_items,
+        )
+    }
+
+    // Calculate the total width needed for the tree section (including scrollbar if needed)
+    fn calculate_tree_width(&self, tree_width: u16, needs_scrollbar: bool) -> u16 {
+        if needs_scrollbar {
+            tree_width + 2 // +1 for scrollbar, +1 for spacing
+        } else {
+            tree_width + 1
+        }
+    }
+
+    // Calculate tree width for row groups view (slightly different spacing)
+    fn calculate_tree_width_for_row_groups(&self, tree_width: u16, needs_scrollbar: bool) -> u16 {
+        if needs_scrollbar {
+            tree_width + 2 // +1 for scrollbar, +1 for spacing
+        } else {
+            tree_width
+        }
+    }
+
+    // Render the schema tree section (tree + optional scrollbar
+    #[allow(clippy::too_many_arguments)]
+    fn render_schema_tree_section(
+        &self,
+        area: Rect,
+        tree_width: u16,
+        needs_scrollbar: bool,
+        total_tree_items: usize,
+        visible_tree_items: usize,
+        adjusted_scroll: usize,
+        buf: &mut Buffer,
+    ) {
+        if needs_scrollbar {
+            let [tree_area, scrollbar_area] =
+                Layout::horizontal([Constraint::Length(tree_width + 1), Constraint::Length(1)])
+                    .areas(area);
+
+            self.render_schema_tree_with_scroll(tree_area, adjusted_scroll, buf);
+
+            ScrollbarComponent::vertical(total_tree_items, visible_tree_items, adjusted_scroll)
+                .render(scrollbar_area, buf);
+        } else {
+            self.render_schema_tree_with_scroll(area, adjusted_scroll, buf);
+        }
+    }
+
+    // Render the schema table
+    fn render_schema_table(&self, area: Rect, adjusted_scroll: usize, buf: &mut Buffer) {
+        FileSchemaTable::new(&self.0.parquet_ctx.schema)
+            .with_selected_index(self.0.state().vertical_offset())
+            .with_horizontal_scroll(self.0.state().horizontal_offset())
+            .with_vertical_scroll(adjusted_scroll)
+            .render(area, buf);
+    }
+
     fn render_tabs_view(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -56,37 +163,61 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_schema_view(&self, area: Rect, buf: &mut Buffer) {
-        // render the schema tree
         let tree_width = self.0.parquet_ctx.schema.tree_width() as u16;
-        let [tree_area, central_area] =
-            Layout::horizontal([Constraint::Length(tree_width + 1), Constraint::Fill(1)])
-                .areas(area);
-        self.render_schema_tree(tree_area, buf);
+        let total_tree_items = self.0.parquet_ctx.schema.columns.len();
+        let visible_tree_items = area.height.saturating_sub(2) as usize;
 
-        // Render the schema table with selection highlighting
-        FileSchemaTable::new(&self.0.parquet_ctx.schema)
-            .with_selected_index(self.0.state().vertical_offset())
-            .with_horizontal_scroll(self.0.state().horizontal_offset())
-            .render(central_area, buf);
+        let needs_scrollbar = total_tree_items > visible_tree_items;
+        let adjusted_scroll = self.calculate_adjusted_scroll_offset(visible_tree_items);
+        let tree_total_width = self.calculate_tree_width(tree_width, needs_scrollbar);
+
+        let [tree_container_area, central_area] =
+            Layout::horizontal([Constraint::Length(tree_total_width), Constraint::Fill(1)])
+                .areas(area);
+
+        self.render_schema_tree_section(
+            tree_container_area,
+            tree_width,
+            needs_scrollbar,
+            total_tree_items,
+            visible_tree_items,
+            adjusted_scroll,
+            buf,
+        );
+        self.render_schema_table(central_area, adjusted_scroll, buf);
     }
 
-    fn render_schema_tree(&self, area: Rect, buf: &mut Buffer) {
+    fn render_schema_tree_with_scroll(&self, area: Rect, scroll_offset: usize, buf: &mut Buffer) {
         SchemaTreeComponent::new(&self.0.parquet_ctx.schema.columns)
             .with_title("Schema Tree".to_string())
             .with_selected_index(self.0.state().vertical_offset())
+            .with_scroll_offset(scroll_offset)
             .render(area, buf);
     }
 
     fn render_row_groups_view(&self, area: Rect, buf: &mut Buffer) {
-        // render the schema tree
         let tree_width = self.0.parquet_ctx.schema.tree_width() as u16;
-        let [tree_area, main_area] = Layout::horizontal([
-            Constraint::Length(tree_width),
-            // Constraint::Fill(1),
-            Constraint::Fill(1),
-        ])
-        .areas(area);
-        self.render_schema_tree(tree_area, buf);
+        let total_tree_items = self.0.parquet_ctx.schema.columns.len();
+        let visible_tree_items = area.height.saturating_sub(2) as usize;
+
+        let needs_scrollbar = total_tree_items > visible_tree_items;
+        let adjusted_scroll = self.calculate_adjusted_scroll_offset(visible_tree_items);
+        let tree_total_width =
+            self.calculate_tree_width_for_row_groups(tree_width, needs_scrollbar);
+
+        let [tree_container_area, main_area] =
+            Layout::horizontal([Constraint::Length(tree_total_width), Constraint::Fill(1)])
+                .areas(area);
+
+        self.render_schema_tree_section(
+            tree_container_area,
+            tree_width,
+            needs_scrollbar,
+            total_tree_items,
+            visible_tree_items,
+            adjusted_scroll,
+            buf,
+        );
 
         let [rg_progress, central_area] =
             Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(main_area);
