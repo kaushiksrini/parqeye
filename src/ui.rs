@@ -7,12 +7,12 @@ use ratatui::{
     Frame,
 };
 
-use crate::{app::AppRenderView, components::RowGroupColumnMetadataComponent};
-use crate::{
-    components::DataTable, components::FileSchemaTable, components::RowGroupMetadata,
-    components::SchemaTreeComponent,
+use crate::app::AppRenderView;
+use crate::components::{
+    DataTable, FileSchemaTable, RowGroupColumnMetadataComponent, RowGroupMetadata,
+    RowGroupProgressBar, SchemaTreeComponent,
 };
-use crate::{components::RowGroupProgressBar, file::Renderable};
+use crate::file::Renderable;
 
 pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
@@ -139,7 +139,7 @@ impl<'a> Widget for AppWidget<'a> {
         self.render_tabs_view(header_area, buf);
         self.render_footer_view(footer_area, buf);
 
-        match app.tabs().active_tab().to_owned().to_string().as_str() {
+        match app.tabs().active_tab().to_string().as_str() {
             "Metadata" => self.render_metadata_view(inner_area, buf),
             "Schema" => self.render_schema_view(inner_area, buf),
             "Row Groups" => self.render_row_groups_view(inner_area, buf),
