@@ -97,17 +97,17 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
                 };
 
                 match line {
-                    SchemaInfo::Root { display: ref d, .. } => {
+                    SchemaInfo::Root { display: d, .. } => {
                         ListItem::new(d.clone()).fg(self.root_color)
                     }
-                    SchemaInfo::Primitive { display: ref d, .. } => {
+                    SchemaInfo::Primitive { display: d, .. } => {
                         let mut item = ListItem::new(d.clone()).fg(self.primitive_color);
                         if is_selected {
                             item = item.bg(self.selected_color).fg(Color::Black);
                         }
                         item
                     }
-                    SchemaInfo::Group { display: ref d, .. } => {
+                    SchemaInfo::Group { display: d, .. } => {
                         ListItem::new(d.clone()).fg(self.group_color)
                     }
                 }
