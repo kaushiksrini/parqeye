@@ -132,6 +132,7 @@ impl<'a> App<'a> {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
+            KeyCode::Esc => self.state.reset(),
             KeyCode::Tab => {
                 self.tabs.next();
                 self.state.reset();
