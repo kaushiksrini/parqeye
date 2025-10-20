@@ -49,6 +49,8 @@ pub struct AppState {
     horizontal_offset: usize,
     vertical_offset: usize,
     tree_scroll_offset: usize,
+    data_vertical_scroll: usize,
+    visible_data_rows: usize,
 }
 
 impl Default for AppState {
@@ -63,6 +65,8 @@ impl AppState {
             horizontal_offset: 0,
             vertical_offset: 0,
             tree_scroll_offset: 0,
+            data_vertical_scroll: 0,
+            visible_data_rows: 20, // Default fallback
         }
     }
 
@@ -70,6 +74,7 @@ impl AppState {
         self.horizontal_offset = 0;
         self.vertical_offset = 0;
         self.tree_scroll_offset = 0;
+        self.data_vertical_scroll = 0;
     }
 
     pub fn horizontal_offset(&self) -> usize {
@@ -107,13 +112,62 @@ impl AppState {
     pub fn tree_scroll_down(&mut self) {
         self.tree_scroll_offset += 1;
     }
+
+    pub fn data_vertical_scroll(&self) -> usize {
+        self.data_vertical_scroll
+    }
+
+    pub fn set_data_vertical_scroll(&mut self, scroll: usize) {
+        self.data_vertical_scroll = scroll;
+    }
+
+    pub fn visible_data_rows(&self) -> usize {
+        self.visible_data_rows
+    }
+
+    pub fn set_visible_data_rows(&mut self, rows: usize) {
+        self.visible_data_rows = rows;
+    }
+
+    pub fn page_up(&mut self, visible_rows: usize, max_rows: usize) {
+        // Move selection up by visible_rows
+        self.vertical_offset = self.vertical_offset.saturating_sub(visible_rows);
+        // Adjust scroll to keep selection visible
+        self.adjust_scroll_to_selection(visible_rows, max_rows);
+    }
+
+    pub fn page_down(&mut self, visible_rows: usize, max_rows: usize) {
+        // Move selection down by visible_rows, clamped to max_rows - 1
+        self.vertical_offset = (self.vertical_offset + visible_rows).min(max_rows.saturating_sub(1));
+        // Adjust scroll to keep selection visible
+        self.adjust_scroll_to_selection(visible_rows, max_rows);
+    }
+
+    pub fn adjust_scroll_to_selection(&mut self, visible_rows: usize, max_rows: usize) {
+        // Ensure selected row is visible in viewport
+        if self.vertical_offset < self.data_vertical_scroll {
+            // Selection is above viewport, scroll up
+            self.data_vertical_scroll = self.vertical_offset;
+        } else if self.vertical_offset >= self.data_vertical_scroll + visible_rows {
+            // Selection is below viewport, scroll down
+            self.data_vertical_scroll = self.vertical_offset.saturating_sub(visible_rows - 1);
+        }
+        
+        // Clamp scroll to valid range
+        let max_scroll = max_rows.saturating_sub(visible_rows);
+        self.data_vertical_scroll = self.data_vertical_scroll.min(max_scroll);
+    }
 }
 
 impl<'a> App<'a> {
     pub fn new(file_info: &'a ParquetCtx) -> Self {
+        let sample_data_rows = file_info
+            .sample_data.total_rows;
+        
         let tab_manager = TabManager::new(
             file_info.schema.column_size(),
             file_info.row_groups.num_row_groups(),
+            sample_data_rows,
         );
 
         Self {
@@ -127,6 +181,12 @@ impl<'a> App<'a> {
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
+            // Calculate visible data rows based on terminal size
+            let terminal_size = terminal.size()?;
+            // Account for: header (3 lines), footer (1 line), table header (3 lines) = 7 lines total
+            let visible_data_rows = (terminal_size.height.saturating_sub(7) as usize).max(1);
+            self.state.set_visible_data_rows(visible_data_rows);
+            
             let render_view = AppRenderView::from_app(self);
             terminal.draw(|frame| crate::ui::render_app(&render_view, frame))?;
             self.handle_events()?;

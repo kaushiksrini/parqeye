@@ -5,6 +5,7 @@ pub struct ParquetSampleData {
     pub flattened_columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
     pub total_columns: usize,
+    pub total_rows: usize,
 }
 
 // TODO: in future create a independent crate that does the parsing,
@@ -48,6 +49,7 @@ impl ParquetSampleData {
             total_columns,
             flattened_columns,
             rows,
+            total_rows: df.height() as usize,
         })
     }
 

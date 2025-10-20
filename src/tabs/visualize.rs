@@ -7,7 +7,8 @@ use crate::{app::AppState, tabs::Tab};
 
 pub struct VisualizeTab {
     pub max_horizontal_scroll: Option<usize>,
-    pub max_vertical_scroll: Option<usize>,
+    pub max_rows: Option<usize>,
+    pub visible_rows: Option<usize>,
 }
 
 impl Default for VisualizeTab {
@@ -20,7 +21,8 @@ impl VisualizeTab {
     pub fn new() -> Self {
         Self {
             max_horizontal_scroll: None,
-            max_vertical_scroll: None,
+            max_rows: None,
+            visible_rows: None,
         }
     }
 
@@ -29,21 +31,44 @@ impl VisualizeTab {
         self
     }
 
-    pub fn with_max_vertical_scroll(mut self, max_vertical_scroll: usize) -> Self {
-        self.max_vertical_scroll = Some(max_vertical_scroll);
+    pub fn with_max_rows(mut self, max_rows: usize) -> Self {
+        self.max_rows = Some(max_rows);
+        self
+    }
+
+    pub fn with_visible_rows(mut self, visible_rows: usize) -> Self {
+        self.visible_rows = Some(visible_rows);
         self
     }
 }
 
 impl Tab for VisualizeTab {
     fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error> {
+        let max_rows = self.max_rows.unwrap_or(0);
+        let visible_rows = state.visible_data_rows();
+        
         match key_event.code {
-            KeyCode::Up if state.vertical_offset() > 0 => state.up(),
-            KeyCode::Down
-                if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) - 1 =>
-            {
-                state.down()
+            // Row navigation (Up/Down arrows)
+            KeyCode::Up => {
+                if state.vertical_offset() > 0 {
+                    state.up();
+                    state.adjust_scroll_to_selection(visible_rows, max_rows);
+                }
             }
+            KeyCode::Down => {
+                if state.vertical_offset() < max_rows.saturating_sub(1) {
+                    state.down();
+                    state.adjust_scroll_to_selection(visible_rows, max_rows);
+                }
+            }
+            // Page navigation (u/d keys)
+            KeyCode::Char('u') | KeyCode::Char('U') => {
+                state.page_up(visible_rows, max_rows);
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                state.page_down(visible_rows, max_rows);
+            }
+            // Column navigation (Left/Right arrows)
             KeyCode::Left if state.horizontal_offset() > 0 => state.left(),
             KeyCode::Right
                 if state.horizontal_offset()
@@ -58,11 +83,23 @@ impl Tab for VisualizeTab {
 
     fn instructions(&self) -> Vec<Span<'static>> {
         vec![
+            "↑".green(),
+            "/".white(),
+            "↓".blue(),
+            " : ".into(),
+            "Row".into(),
+            " | ".white(),
             "→".green(),
             "/".white(),
             "←".blue(),
             " : ".into(),
-            "Navigate".into(),
+            "Column".into(),
+            " | ".white(),
+            "u".green(),
+            "/".white(),
+            "d".blue(),
+            " : ".into(),
+            "Page".into(),
         ]
     }
 
@@ -70,26 +107,3 @@ impl Tab for VisualizeTab {
         "Visualize".to_string()
     }
 }
-
-// impl Tab for VisualizeTab {
-//     fn on_event(&mut self, event: Event, state: &mut TabState) -> Result<(), io::Error> {
-//         match event {
-//             Event::Key(key_event) => {
-//                 match key_event.code {
-//                     KeyCode::Left => {
-//                         state.horizontal_scroll -= 1;
-//                     }
-//                     KeyCode::Right => {
-//                         state.horizontal_scroll += 1;
-//                     }
-//                     KeyCode::Up => {
-//                         state.vertical_scroll -= 1;
-//                     }
-//                     KeyCode::Down => {
-//                         state.vertical_scroll += 1;
-//                 }
-//             }
-//         }
-//         Ok(())
-//     }
-// }

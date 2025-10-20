@@ -19,13 +19,13 @@ pub struct TabManager {
 }
 
 impl TabManager {
-    pub fn new(num_columns: usize, num_row_groups: usize) -> Self {
+    pub fn new(num_columns: usize, num_row_groups: usize, sample_data_rows: usize) -> Self {
         Self {
             tabs: vec![
                 Box::new(
                     VisualizeTab::new()
                         .with_max_horizontal_scroll(num_columns)
-                        .with_max_vertical_scroll(num_row_groups),
+                        .with_max_rows(sample_data_rows),
                 ),
                 Box::new(
                     MetadataTab::new()

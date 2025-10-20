@@ -246,13 +246,11 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_visualize_view(&self, area: Rect, buf: &mut Buffer) {
-        if let Some(ref sample_data) = self.0.parquet_ctx.sample_data {
-            DataTable::new(sample_data)
-                .with_horizontal_scroll(self.0.state().horizontal_offset())
-                .render(area, buf);
-        } else {
-            "No sample data available - failed to read parquet file data.".render(area, buf);
-        }
+        DataTable::new(&self.0.parquet_ctx.sample_data)
+            .with_horizontal_scroll(self.0.state().horizontal_offset())
+            .with_vertical_scroll(self.0.state().data_vertical_scroll())
+            .with_selected_row(Some(self.0.state().vertical_offset()))
+            .render(area, buf)
     }
 }
 
