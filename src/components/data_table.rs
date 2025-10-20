@@ -27,7 +27,7 @@ impl<'a> DataTable<'a> {
     pub fn new(data: &'a ParquetSampleData) -> Self {
         Self {
             data,
-            title: "Data Preview".to_string(),
+            title: "Data Preview (up to 100 rows)".to_string(),
             title_color: Color::Cyan,
             border_style: border::ROUNDED,
             horizontal_scroll: 0,
