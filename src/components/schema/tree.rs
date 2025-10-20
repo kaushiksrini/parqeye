@@ -10,7 +10,8 @@ use ratatui::{
 
 pub struct SchemaTreeComponent<'a> {
     pub schema_columns: &'a Vec<SchemaInfo>,
-    pub selected_index: Option<usize>,
+    pub selected_index: usize,
+    pub scroll_offset: usize,
     pub title: String,
     pub title_color: Color,
     pub root_color: Color,
@@ -25,7 +26,8 @@ impl<'a> SchemaTreeComponent<'a> {
     pub fn new(schema_columns: &'a Vec<SchemaInfo>) -> Self {
         Self {
             schema_columns,
-            selected_index: None,
+            selected_index: 0,
+            scroll_offset: 0,
             title: "Schema Tree".to_string(),
             title_color: Color::Yellow,
             root_color: Color::DarkGray,
@@ -37,8 +39,13 @@ impl<'a> SchemaTreeComponent<'a> {
         }
     }
 
-    pub fn with_selected_index(mut self, index: Option<usize>) -> Self {
+    pub fn with_selected_index(mut self, index: usize) -> Self {
         self.selected_index = index;
+        self
+    }
+
+    pub fn with_scroll_offset(mut self, offset: usize) -> Self {
+        self.scroll_offset = offset;
         self
     }
 
@@ -82,36 +89,39 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
             .filter_map(|(idx, line)| matches!(line, SchemaInfo::Primitive { .. }).then_some(idx))
             .collect();
 
+        // Calculate visible range based on scroll offset and available height
+        let visible_height = area.height.saturating_sub(1) as usize; // Account for borders + legend
+        let start_idx = self.scroll_offset;
+        let end_idx = (start_idx + visible_height).min(self.schema_columns.len());
+
         let items: Vec<ListItem> = self
             .schema_columns
             .iter()
             .enumerate()
+            .skip(start_idx)
+            .take(end_idx - start_idx)
             .map(|(idx, line)| {
-                let is_selected = if let Some(selected_primitive_idx) = self.selected_index {
-                    // Convert primitive index to schema tree index
-                    if let Some(&schema_idx) =
-                        primitive_to_schema_map.get(selected_primitive_idx.saturating_sub(1))
-                    {
-                        idx == schema_idx
-                    } else {
-                        false
-                    }
+                let is_selected = if self.selected_index > 0 {
+                    // Convert primitive index (1-based) to schema tree index
+                    primitive_to_schema_map
+                        .get(self.selected_index - 1)
+                        .is_some_and(|&schema_idx| idx == schema_idx)
                 } else {
                     false
                 };
 
                 match line {
-                    SchemaInfo::Root { display: ref d, .. } => {
+                    SchemaInfo::Root { display: d, .. } => {
                         ListItem::new(d.clone()).fg(self.root_color)
                     }
-                    SchemaInfo::Primitive { display: ref d, .. } => {
+                    SchemaInfo::Primitive { display: d, .. } => {
                         let mut item = ListItem::new(d.clone()).fg(self.primitive_color);
                         if is_selected {
                             item = item.bg(self.selected_color).fg(Color::Black);
                         }
                         item
                     }
-                    SchemaInfo::Group { display: ref d, .. } => {
+                    SchemaInfo::Group { display: d, .. } => {
                         ListItem::new(d.clone()).fg(self.group_color)
                     }
                 }
@@ -131,7 +141,7 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
                 "Group".fg(self.group_color),
             ];
 
-            if self.selected_index.is_some() {
+            if self.selected_index > 0 {
                 legend_vec.extend(vec![", ".into(), "Selected".bold().fg(self.selected_color)]);
             }
 

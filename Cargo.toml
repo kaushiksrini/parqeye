@@ -1,7 +1,11 @@
 [package]
-name = "datatools"
+name = "parqeye"
+description = "Parquet viewer for the command line"
 version = "0.1.0"
-edition = "2021"
+readme = "README.md"
+license = "MIT"
+keywords = ["parquet", "parq", "visualizer", "schema", "tui"]
+edition = "2024"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }         # for CLI parsing
@@ -12,4 +16,4 @@ ratatui = "0.29.0"
 crossterm = "0.29.0"
 chrono = "0.4"                                          # for timestamp handling
 itertools = "0.14.0"
-polars = { version = "0.51.0", features = ["lazy", "parquet", "dtype-decimal"] } 
+polars = { version = "0.51.0", features = ["lazy", "parquet", "dtype-full"] } 

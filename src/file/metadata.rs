@@ -12,9 +12,9 @@ use ratatui::{
 };
 use std::collections::{HashMap, HashSet};
 
+use crate::file::Renderable;
 use crate::file::utils::commas;
 use crate::file::utils::human_readable_bytes;
-use crate::file::Renderable;
 
 #[derive(Debug)]
 pub struct FileMetadata {
@@ -129,8 +129,8 @@ impl Renderable for FileMetadata {
             .into_iter()
             .map(|(k, v)| {
                 Row::new(vec![
-                    Cell::from(format!("{:>18}", k)).bold().fg(Color::Blue),
-                    Cell::from(format!("{:<}", v)),
+                    Cell::from(format!("{k:>18}")).bold().fg(Color::Blue),
+                    Cell::from(format!("{v:<}")),
                 ])
             })
             .collect();

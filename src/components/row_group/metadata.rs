@@ -1,11 +1,12 @@
-use crate::file::row_groups::RowGroupStats;
+use crate::file::row_groups::{RowGroupAvgMedianStats, RowGroupStats};
+use ratatui::style::Style;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     prelude::Color,
-    style::{Style, Stylize},
+    style::Stylize,
     symbols::Marker,
-    text::Line,
+    text::{Line, Span},
     widgets::{Axis, Block, Borders, Chart, Dataset, Widget},
 };
 
@@ -14,13 +15,19 @@ use crate::file::utils::{commas, human_readable_bytes};
 /// Component to display row group level statistics
 pub struct RowGroupMetadata<'a> {
     row_group_stats: &'a [RowGroupStats],
+    avg_median_stats: &'a RowGroupAvgMedianStats,
     selected_idx: usize,
 }
 
 impl<'a> RowGroupMetadata<'a> {
-    pub fn new(row_group_stats: &'a [RowGroupStats], selected_idx: usize) -> Self {
+    pub fn new(
+        row_group_stats: &'a [RowGroupStats],
+        avg_median_stats: &'a RowGroupAvgMedianStats,
+        selected_idx: usize,
+    ) -> Self {
         Self {
             row_group_stats,
+            avg_median_stats,
             selected_idx,
         }
     }
@@ -48,24 +55,32 @@ impl<'a> Widget for RowGroupMetadata<'a> {
             &commas(selected_stats.rows as u64),
             horizontal_areas[0],
             buf,
+            commas(self.avg_median_stats.avg_rows_per_rg as u64),
+            commas(self.avg_median_stats.median_rows_per_rg as u64),
         );
         self.render_stat_block(
             "Compressed",
             &human_readable_bytes(selected_stats.compressed_size as u64),
             horizontal_areas[1],
             buf,
+            human_readable_bytes(self.avg_median_stats.avg_compressed_size as u64),
+            human_readable_bytes(self.avg_median_stats.median_compressed_size as u64),
         );
         self.render_stat_block(
             "Uncompressed",
             &human_readable_bytes(selected_stats.uncompressed_size as u64),
             horizontal_areas[2],
             buf,
+            human_readable_bytes(self.avg_median_stats.avg_uncompressed_size as u64),
+            human_readable_bytes(self.avg_median_stats.median_uncompressed_size as u64),
         );
         self.render_stat_block(
             "Ratio",
-            &selected_stats.compression_ratio,
+            &format!("{:.2}", selected_stats.compression_ratio),
             horizontal_areas[3],
             buf,
+            format!("{:.2}", self.avg_median_stats.avg_compression_ratio),
+            format!("{:.2}", self.avg_median_stats.median_compression_ratio),
         );
 
         let central_area =
@@ -77,11 +92,25 @@ impl<'a> Widget for RowGroupMetadata<'a> {
 }
 
 impl<'a> RowGroupMetadata<'a> {
-    fn render_stat_block(&self, title: &str, value: &str, area: Rect, buf: &mut Buffer) {
+    fn render_stat_block(
+        &self,
+        title: &str,
+        value: &str,
+        area: Rect,
+        buf: &mut Buffer,
+        average: String,
+        median: String,
+    ) {
+        let title_bottom: Vec<Span> = vec![
+            average.light_cyan().bold(),
+            " / ".white().bold(),
+            median.light_magenta().bold(),
+        ];
+
         let block = Block::bordered()
-            .title(title)
-            .border_style(ratatui::style::Style::default().fg(Color::Blue))
-            .title_style(ratatui::style::Style::default().fg(Color::Blue).bold());
+            .title(title.light_blue().bold())
+            .title_bottom(Line::from(title_bottom).centered())
+            .border_style(ratatui::style::Style::default().fg(Color::Blue));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -260,11 +289,13 @@ impl<'a> RowGroupMetadata<'a> {
             .map(|(_, ratio)| *ratio)
             .fold(0.0, f64::max);
 
-        let datasets = vec![Dataset::default()
-            .name("Compression Ratio")
-            .marker(Marker::Dot)
-            .style(Style::default().fg(Color::Yellow))
-            .data(&ratio_data)];
+        let datasets = vec![
+            Dataset::default()
+                .name("Compression Ratio")
+                .marker(Marker::Dot)
+                .style(Style::default().fg(Color::Yellow))
+                .data(&ratio_data),
+        ];
 
         let x_labels = self.make_x_labels();
 

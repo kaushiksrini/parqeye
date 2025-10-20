@@ -10,7 +10,7 @@ pub struct ParquetCtx {
     pub metadata: FileMetadata,
     pub row_groups: RowGroups,
     pub schema: FileSchema,
-    pub sample_data: Option<ParquetSampleData>,
+    pub sample_data: ParquetSampleData,
 }
 
 impl ParquetCtx {
@@ -21,11 +21,11 @@ impl ParquetCtx {
         let row_groups = RowGroups::from_file_reader(&reader)?;
 
         // TODO: async calls?
-        let metadata = FileMetadata::from_metadata(&md)?;
-        let schema = FileSchema::from_metadata(&md)?;
+        let metadata = FileMetadata::from_metadata(md)?;
+        let schema = FileSchema::from_metadata(md)?;
 
         // Read sample data
-        let sample_data = ParquetSampleData::read_sample_data(file_path).ok();
+        let sample_data = ParquetSampleData::read_sample_data(file_path)?;
 
         Ok(ParquetCtx {
             file_path: file_path.to_string(),

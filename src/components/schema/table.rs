@@ -14,28 +14,30 @@ use crate::file::Renderable;
 
 pub struct FileSchemaTable<'a> {
     pub schema: &'a FileSchema,
-    pub selected_index: Option<usize>,
+    pub selected_index: usize,
     pub title: String,
     pub title_color: Color,
     pub selected_color: Color,
     pub border_style: border::Set,
     pub horizontal_scroll: usize,
+    pub vertical_scroll: usize,
 }
 
 impl<'a> FileSchemaTable<'a> {
     pub fn new(schema: &'a FileSchema) -> Self {
         Self {
             schema,
-            selected_index: None,
+            selected_index: 0,
             title: "Column Statistics".to_string(),
             title_color: Color::Green,
             selected_color: Color::Yellow,
             border_style: border::ROUNDED,
             horizontal_scroll: 0,
+            vertical_scroll: 0,
         }
     }
 
-    pub fn with_selected_index(mut self, index: Option<usize>) -> Self {
+    pub fn with_selected_index(mut self, index: usize) -> Self {
         self.selected_index = index;
         self
     }
@@ -58,6 +60,11 @@ impl<'a> FileSchemaTable<'a> {
 
     pub fn with_horizontal_scroll(mut self, offset: usize) -> Self {
         self.horizontal_scroll = offset;
+        self
+    }
+
+    pub fn with_vertical_scroll(mut self, offset: usize) -> Self {
+        self.vertical_scroll = offset;
         self
     }
 
@@ -85,7 +92,7 @@ impl<'a> FileSchemaTable<'a> {
 
 impl<'a> Widget for FileSchemaTable<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let all_headers = vec![
+        let all_headers = [
             "Repetition",
             "Physical",
             "Compressed",
@@ -109,11 +116,16 @@ impl<'a> Widget for FileSchemaTable<'a> {
             .saturating_sub(max_visible_columns as usize);
         let horizontal_scroll = self.horizontal_scroll.min(max_scroll);
 
-        // Generate table data with only visible columns and get column widths
-        let (visible_rows, column_widths) = self.schema.generate_table_rows_with_columns(
+        // Calculate visible rows based on vertical scroll and available height
+        let visible_rows_count = area.height.saturating_sub(1) as usize;
+
+        // Generate table data with only visible columns and rows
+        let (visible_rows, column_widths) = self.schema.generate_table_rows_with_scroll(
             self.selected_index,
             horizontal_scroll,
             max_visible_columns as usize,
+            self.vertical_scroll,
+            visible_rows_count,
         );
 
         // Get visible columns
@@ -145,7 +157,7 @@ impl<'a> Widget for FileSchemaTable<'a> {
             .block(
                 Block::bordered()
                     .title(
-                        Line::from(format!("{} (←→ scroll)", self.title))
+                        Line::from(self.title.clone())
                             .centered()
                             .bold()
                             .fg(self.title_color),

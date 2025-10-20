@@ -5,6 +5,7 @@ pub struct ParquetSampleData {
     pub flattened_columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
     pub total_columns: usize,
+    pub total_rows: usize,
 }
 
 // TODO: in future create a independent crate that does the parsing,
@@ -24,7 +25,8 @@ impl ParquetSampleData {
         let df = Self::flatten_struct_columns(df)?;
 
         // Get column names
-        let flattened_columns: Vec<String> = df.get_column_names()
+        let flattened_columns: Vec<String> = df
+            .get_column_names()
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -47,6 +49,7 @@ impl ParquetSampleData {
             total_columns,
             flattened_columns,
             rows,
+            total_rows: df.height() as usize,
         })
     }
 
@@ -64,11 +67,10 @@ impl ParquetSampleData {
                 if any_value.is_null() {
                     "NULL".to_string()
                 } else {
-                    format!("{}", any_value)
+                    format!("{any_value}")
                 }
             }
             Err(_) => "NULL".to_string(),
         }
     }
-
 }

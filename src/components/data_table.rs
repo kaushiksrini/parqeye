@@ -5,8 +5,8 @@ use ratatui::{
     prelude::Color,
     style::Stylize,
     symbols::border,
-    widgets::{Block, Borders, Cell, Row, Table, Widget},
     text::Line,
+    widgets::{Block, Borders, Cell, Row, Table, Widget},
 };
 use std::cmp::min;
 
@@ -18,6 +18,7 @@ pub struct DataTable<'a> {
     pub title_color: Color,
     pub border_style: border::Set,
     pub horizontal_scroll: usize,
+    pub vertical_scroll: usize,
     pub selected_row: Option<usize>,
     pub selected_color: Color,
 }
@@ -26,12 +27,13 @@ impl<'a> DataTable<'a> {
     pub fn new(data: &'a ParquetSampleData) -> Self {
         Self {
             data,
-            title: "Data Preview (First 100 rows)".to_string(),
+            title: "Data Preview (up to 100 rows)".to_string(),
             title_color: Color::Cyan,
             border_style: border::ROUNDED,
             horizontal_scroll: 0,
+            vertical_scroll: 0,
             selected_row: None,
-            selected_color: Color::Yellow,
+            selected_color: Color::Rgb(60, 60, 60),
         }
     }
 
@@ -53,6 +55,11 @@ impl<'a> DataTable<'a> {
 
     pub fn with_horizontal_scroll(mut self, offset: usize) -> Self {
         self.horizontal_scroll = offset;
+        self
+    }
+
+    pub fn with_vertical_scroll(mut self, offset: usize) -> Self {
+        self.vertical_scroll = offset;
         self
     }
 
@@ -113,7 +120,7 @@ impl<'a> Widget for DataTable<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Calculate how many columns we can show (reserve space for row numbers)
         let row_num_width = 6; // Width for row numbers
-        let available_width = area.width.saturating_sub(row_num_width + 6); // Account for borders and row numbers
+        let available_width = area.width.saturating_sub(row_num_width + 1); // Account for borders and row numbers
         let min_column_width = 12;
         let max_visible_columns = (available_width / min_column_width).max(1) as usize;
 
@@ -131,11 +138,12 @@ impl<'a> Widget for DataTable<'a> {
             .cloned()
             .collect();
 
-        // Get visible data for each row
+        // Get visible data for each row (apply vertical scroll)
         let visible_rows: Vec<Vec<String>> = self
             .data
             .rows
             .iter()
+            .skip(self.vertical_scroll)
             .map(|row| {
                 row.iter()
                     .skip(horizontal_scroll)
@@ -153,7 +161,7 @@ impl<'a> Widget for DataTable<'a> {
         col_constraints.extend(
             column_widths
                 .iter()
-                .map(|&width| Constraint::Length(width as u16))
+                .map(|&width| Constraint::Length(width as u16)),
         );
 
         // Create table rows with row numbers
@@ -161,38 +169,44 @@ impl<'a> Widget for DataTable<'a> {
             .into_iter()
             .enumerate()
             .map(|(row_idx, row_data)| {
+                // Calculate actual row number (accounting for vertical scroll)
+                let actual_row_num = row_idx + self.vertical_scroll + 1;
+                let is_selected = self.selected_row.map_or(false, |selected| {
+                    actual_row_num - 1 == selected
+                });
+
                 // Create cells with row number first
-                let mut cells: Vec<Cell> = vec![
-                    Cell::from(format!("{:>4}", row_idx + 1))
-                        .fg(Color::DarkGray)
-                ];
+                let row_num_cell = if is_selected {
+                    Cell::from(format!("{:>4}", actual_row_num))
+                        .fg(Color::White)
+                        .underlined()
+                } else {
+                    Cell::from(format!("{:>4}", actual_row_num)).fg(Color::DarkGray)
+                };
                 
+                let mut cells: Vec<Cell> = vec![row_num_cell];
+
                 // Add data cells
-                cells.extend(row_data
-                    .into_iter()
-                    .map(|cell_data| {
-                        // Truncate cell data if too long (Unicode-safe)
-                        let truncated = if cell_data.chars().count() > 23 {
-                            let truncated_chars: String = cell_data.chars().take(20).collect();
-                            format!("{}...", truncated_chars)
-                        } else {
-                            cell_data
-                        };
-                        Cell::from(format!(" {}", truncated)) // Add space for padding
-                    })
-                );
+                cells.extend(row_data.into_iter().map(|cell_data| {
+                    // Truncate cell data if too long (Unicode-safe)
+                    let truncated = if cell_data.chars().count() > 23 {
+                        let truncated_chars: String = cell_data.chars().take(20).collect();
+                        format!("{truncated_chars}...")
+                    } else {
+                        cell_data
+                    };
+                    Cell::from(format!(" {truncated}")) // Add space for padding
+                }));
 
                 let mut row = Row::new(cells);
 
-                // Highlight selected row
-                if let Some(selected) = self.selected_row {
-                    if row_idx == selected {
-                        row = row.style(
-                            ratatui::style::Style::default()
-                                .bg(self.selected_color)
-                                .fg(Color::Black),
-                        );
-                    }
+                // Highlight selected row with light gray background
+                if is_selected {
+                    row = row.style(
+                        ratatui::style::Style::default()
+                            .bg(self.selected_color)
+                            .fg(Color::White),
+                    );
                 }
 
                 row
@@ -200,36 +214,20 @@ impl<'a> Widget for DataTable<'a> {
             .collect();
 
         // Create header row with empty cell for row number column
-        let mut header_cells: Vec<Cell> = vec![
-            Cell::from("    ")
-                .fg(Color::DarkGray)
-        ];
-        
-        header_cells.extend(
-            visible_headers
-                .into_iter()
-                .map(|header| {
-                    let truncated = if header.len() > 20 {
-                        format!("{}...", &header[..17])
-                    } else {
-                        header
-                    };
-                    Cell::from(format!(" {}", truncated))
-                        .bold()
-                        .fg(Color::Yellow)
-                })
-        );
+        let mut header_cells: Vec<Cell> = vec![Cell::from("    ").fg(Color::DarkGray)];
 
-        let scroll_indicator = if max_scroll > 0 {
-            format!(" (←→ scroll {}/{})", horizontal_scroll, max_scroll)
-        } else {
-            "".to_string()
-        };
+        header_cells.extend(visible_headers.into_iter().map(|header| {
+            let truncated = if header.len() > 20 {
+                format!("{}...", &header[..17])
+            } else {
+                header
+            };
+            Cell::from(format!(" {truncated}")).bold().fg(Color::Yellow)
+        }));
 
-        let [header_area, content_area] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Fill(1),
-        ]).areas(area);
+
+        let [header_area, content_area] =
+            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
         // Create header as a single-row table
         let header_widget = Table::new(vec![Row::new(header_cells)], col_constraints.clone())
@@ -238,16 +236,16 @@ impl<'a> Widget for DataTable<'a> {
                 Block::bordered()
                     .borders(Borders::BOTTOM | Borders::TOP)
                     .border_set(self.border_style)
-                    .title(Line::from(format!("{}{}", self.title, scroll_indicator))
+                    .title(
+                        Line::from(format!("{}", self.title))
                             .centered()
                             .bold()
                             .fg(self.title_color),
-                    )
+                    ),
             );
 
         // Create data table without header
-        let table_widget = Table::new(table_rows, col_constraints)
-            .column_spacing(2);
+        let table_widget = Table::new(table_rows, col_constraints).column_spacing(2);
 
         header_widget.render(header_area, buf);
         table_widget.render(content_area, buf);

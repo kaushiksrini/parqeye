@@ -3,17 +3,14 @@ use ratatui::DefaultTerminal;
 use std::io;
 
 use crate::file::parquet_ctx::ParquetCtx;
-use crate::tabs::{TabManager, TabType};
-use std::cmp::max;
+use crate::tabs::TabManager;
 
 pub struct AppRenderView<'a> {
     pub title: &'a str,
     pub parquet_ctx: &'a ParquetCtx,
     file_name: &'a str,
     tabs: &'a TabManager,
-    column_selected: Option<usize>,
-    row_group_selected: usize,
-    pub horizontal_scroll: usize,
+    pub state: &'a AppState,
 }
 
 impl<'a> AppRenderView<'a> {
@@ -23,26 +20,20 @@ impl<'a> AppRenderView<'a> {
             parquet_ctx: app.parquet_ctx,
             file_name: &app.file_name,
             tabs: &app.tabs,
-            column_selected: app.column_selected,
-            row_group_selected: app.row_group_selected,
-            horizontal_scroll: app.horizontal_scroll,
+            state: &app.state,
         }
     }
 
     pub fn tabs(&self) -> &TabManager {
-        &self.tabs
+        self.tabs
     }
 
     pub fn file_name(&self) -> &str {
-        &self.file_name
+        self.file_name
     }
 
-    pub fn column_selected(&self) -> &Option<usize> {
-        &self.column_selected
-    }
-
-    pub fn row_group_selected(&self) -> usize {
-        self.row_group_selected
+    pub fn state(&self) -> &AppState {
+        self.state
     }
 }
 
@@ -51,28 +42,151 @@ pub struct App<'a> {
     pub file_name: String,
     pub exit: bool,
     pub tabs: TabManager,
-    pub column_selected: Option<usize>,
-    pub scroll_offset: usize,
-    pub row_group_selected: usize,
-    pub horizontal_scroll: usize,
+    pub state: AppState,
+}
+
+pub struct AppState {
+    horizontal_offset: usize,
+    vertical_offset: usize,
+    tree_scroll_offset: usize,
+    data_vertical_scroll: usize,
+    visible_data_rows: usize,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            horizontal_offset: 0,
+            vertical_offset: 0,
+            tree_scroll_offset: 0,
+            data_vertical_scroll: 0,
+            visible_data_rows: 20, // Default fallback
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.horizontal_offset = 0;
+        self.vertical_offset = 0;
+        self.tree_scroll_offset = 0;
+        self.data_vertical_scroll = 0;
+    }
+
+    pub fn horizontal_offset(&self) -> usize {
+        self.horizontal_offset
+    }
+
+    pub fn vertical_offset(&self) -> usize {
+        self.vertical_offset
+    }
+
+    pub fn down(&mut self) {
+        self.vertical_offset += 1;
+    }
+
+    pub fn up(&mut self) {
+        self.vertical_offset = self.vertical_offset.saturating_sub(1);
+    }
+
+    pub fn right(&mut self) {
+        self.horizontal_offset += 1;
+    }
+
+    pub fn left(&mut self) {
+        self.horizontal_offset = self.horizontal_offset.saturating_sub(1);
+    }
+
+    pub fn tree_scroll_offset(&self) -> usize {
+        self.tree_scroll_offset
+    }
+
+    pub fn tree_scroll_up(&mut self) {
+        self.tree_scroll_offset = self.tree_scroll_offset.saturating_sub(1);
+    }
+
+    pub fn tree_scroll_down(&mut self) {
+        self.tree_scroll_offset += 1;
+    }
+
+    pub fn data_vertical_scroll(&self) -> usize {
+        self.data_vertical_scroll
+    }
+
+    pub fn set_data_vertical_scroll(&mut self, scroll: usize) {
+        self.data_vertical_scroll = scroll;
+    }
+
+    pub fn visible_data_rows(&self) -> usize {
+        self.visible_data_rows
+    }
+
+    pub fn set_visible_data_rows(&mut self, rows: usize) {
+        self.visible_data_rows = rows;
+    }
+
+    pub fn page_up(&mut self, visible_rows: usize, max_rows: usize) {
+        // Move selection up by visible_rows
+        self.vertical_offset = self.vertical_offset.saturating_sub(visible_rows);
+        // Adjust scroll to keep selection visible
+        self.adjust_scroll_to_selection(visible_rows, max_rows);
+    }
+
+    pub fn page_down(&mut self, visible_rows: usize, max_rows: usize) {
+        // Move selection down by visible_rows, clamped to max_rows - 1
+        self.vertical_offset = (self.vertical_offset + visible_rows).min(max_rows.saturating_sub(1));
+        // Adjust scroll to keep selection visible
+        self.adjust_scroll_to_selection(visible_rows, max_rows);
+    }
+
+    pub fn adjust_scroll_to_selection(&mut self, visible_rows: usize, max_rows: usize) {
+        // Ensure selected row is visible in viewport
+        if self.vertical_offset < self.data_vertical_scroll {
+            // Selection is above viewport, scroll up
+            self.data_vertical_scroll = self.vertical_offset;
+        } else if self.vertical_offset >= self.data_vertical_scroll + visible_rows {
+            // Selection is below viewport, scroll down
+            self.data_vertical_scroll = self.vertical_offset.saturating_sub(visible_rows - 1);
+        }
+        
+        // Clamp scroll to valid range
+        let max_scroll = max_rows.saturating_sub(visible_rows);
+        self.data_vertical_scroll = self.data_vertical_scroll.min(max_scroll);
+    }
 }
 
 impl<'a> App<'a> {
     pub fn new(file_info: &'a ParquetCtx) -> Self {
+        let sample_data_rows = file_info
+            .sample_data.total_rows;
+        
+        let tab_manager = TabManager::new(
+            file_info.schema.column_size(),
+            file_info.row_groups.num_row_groups(),
+            sample_data_rows,
+        );
+
         Self {
             parquet_ctx: file_info,
             file_name: file_info.file_path.clone(),
             exit: false,
-            tabs: TabManager::new(),
-            column_selected: None,
-            scroll_offset: 0,
-            row_group_selected: 0,
-            horizontal_scroll: 0,
+            tabs: tab_manager,
+            state: AppState::new(),
         }
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
+            // Calculate visible data rows based on terminal size
+            let terminal_size = terminal.size()?;
+            // Account for: header (3 lines), footer (1 line), table header (3 lines) = 7 lines total
+            let visible_data_rows = (terminal_size.height.saturating_sub(7) as usize).max(1);
+            self.state.set_visible_data_rows(visible_data_rows);
+            
             let render_view = AppRenderView::from_app(self);
             terminal.draw(|frame| crate::ui::render_app(&render_view, frame))?;
             self.handle_events()?;
@@ -92,55 +206,22 @@ impl<'a> App<'a> {
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
-            KeyCode::Char('q') => self.exit(),
+            KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
+            KeyCode::Esc => self.state.reset(),
             KeyCode::Tab => {
                 self.tabs.next();
-                self.horizontal_scroll = 0;
+                self.state.reset();
             }
             KeyCode::BackTab => {
                 self.tabs.prev();
-                self.horizontal_scroll = 0;
+                self.state.reset();
             }
-            KeyCode::Down => {
-                let total_columns: usize = self.parquet_ctx.schema.column_size();
-                match self.tabs.active_tab() {
-                    TabType::Schema | TabType::RowGroups => {
-                        if let Some(idx) = self.column_selected {
-                            if idx + 1 <= total_columns {
-                                self.column_selected = Some(idx + 1);
-                            }
-                        } else {
-                            self.column_selected = Some(1);
-                        }
-                    }
-                    _ => {}
-                }
+            _ => {
+                self.tabs
+                    .active_tab()
+                    .on_event(key_event, &mut self.state)
+                    .unwrap();
             }
-            KeyCode::Up => match self.tabs.active_tab() {
-                TabType::Schema | TabType::RowGroups => {
-                    if let Some(idx) = self.column_selected {
-                        if idx > 1 {
-                            self.column_selected = Some(idx - 1);
-                        } else {
-                            self.column_selected = None;
-                        }
-                    }
-                }
-                _ => {}
-            },
-            KeyCode::Right => match self.tabs.active_tab() {
-                TabType::Schema | TabType::Visualize => {
-                    self.horizontal_scroll += 1;
-                }
-                _ => {}
-            },
-            KeyCode::Left => match self.tabs.active_tab() {
-                TabType::Schema | TabType::Visualize => {
-                    self.horizontal_scroll = max(0, self.horizontal_scroll.saturating_sub(1));
-                }
-                _ => {}
-            },
-            _ => {}
         }
     }
 

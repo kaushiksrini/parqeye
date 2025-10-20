@@ -5,6 +5,9 @@ use parquet::file::reader::FileReader;
 use parquet::file::reader::{ChunkReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
 
+use itertools::Itertools;
+use std::iter::Iterator;
+
 pub struct RowGroupPageInfo {
     pub page_infos: Vec<PageInfo>,
 }
@@ -41,8 +44,69 @@ pub struct RowGroupColumnMetadata {
     pub pages: RowGroupPageInfo,
 }
 
+pub struct RowGroupAvgMedianStats {
+    pub avg_compressed_size: f64,
+    pub median_compressed_size: f64,
+    pub avg_uncompressed_size: f64,
+    pub median_uncompressed_size: f64,
+    pub avg_rows_per_rg: f64,
+    pub median_rows_per_rg: f64,
+    pub avg_compression_ratio: f64,
+    pub median_compression_ratio: f64,
+}
+
+impl RowGroupAvgMedianStats {
+    pub fn new(row_groups_stats: &[RowGroupStats]) -> Self {
+        // TODO: parallelize or iterate row group stats once
+        Self {
+            avg_compressed_size: row_groups_stats
+                .iter()
+                .map(|rg| rg.compressed_size)
+                .sum::<i64>() as f64
+                / row_groups_stats.len() as f64,
+            median_compressed_size: row_groups_stats
+                .iter()
+                .map(|rg| rg.compressed_size)
+                .sorted()
+                .nth(row_groups_stats.len() / 2)
+                .unwrap_or(0) as f64,
+            avg_uncompressed_size: row_groups_stats
+                .iter()
+                .map(|rg| rg.uncompressed_size)
+                .sum::<i64>() as f64
+                / row_groups_stats.len() as f64,
+            median_uncompressed_size: row_groups_stats
+                .iter()
+                .map(|rg| rg.uncompressed_size)
+                .sorted()
+                .nth(row_groups_stats.len() / 2)
+                .unwrap_or(0) as f64,
+            avg_rows_per_rg: row_groups_stats.iter().map(|rg| rg.rows).sum::<i64>() as f64
+                / row_groups_stats.len() as f64,
+            median_rows_per_rg: row_groups_stats
+                .iter()
+                .map(|rg| rg.rows)
+                .sorted()
+                .nth(row_groups_stats.len() / 2)
+                .unwrap_or(0) as f64,
+            avg_compression_ratio: row_groups_stats
+                .iter()
+                .map(|rg| rg.compression_ratio)
+                .sum::<f64>()
+                / row_groups_stats.len() as f64,
+            median_compression_ratio: row_groups_stats
+                .iter()
+                .map(|rg| rg.compression_ratio)
+                .sorted_by(|a, b| a.partial_cmp(b).unwrap())
+                .nth(row_groups_stats.len() / 2)
+                .unwrap_or(0.),
+        }
+    }
+}
+
 pub struct RowGroups {
     pub row_groups: Vec<RowGroupStats>,
+    pub avg_median_stats: RowGroupAvgMedianStats,
 }
 
 impl RowGroups {
@@ -52,7 +116,17 @@ impl RowGroups {
         let row_groups = (0..reader.metadata().num_row_groups())
             .map(|idx| RowGroupStats::from_file_reader(reader, idx))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { row_groups })
+
+        let avg_median_stats = RowGroupAvgMedianStats::new(&row_groups);
+
+        Ok(Self {
+            row_groups,
+            avg_median_stats,
+        })
+    }
+
+    pub fn num_row_groups(&self) -> usize {
+        self.row_groups.len()
     }
 }
 
@@ -61,7 +135,7 @@ pub struct RowGroupStats {
     pub rows: i64,
     pub compressed_size: i64,
     pub uncompressed_size: i64,
-    pub compression_ratio: String,
+    pub compression_ratio: f64,
     pub column_metadata: Vec<RowGroupColumnMetadata>,
 }
 
@@ -73,7 +147,7 @@ impl RowGroupStats {
         let rg_md: &RowGroupMetaData = reader.metadata().row_group(idx);
         let compressed_size = rg_md.columns().iter().map(|c| c.compressed_size()).sum();
         let uncompressed_size = rg_md.columns().iter().map(|c| c.uncompressed_size()).sum();
-        let compression_ratio = format!("{:.2}", uncompressed_size as f64 / compressed_size as f64);
+        let compression_ratio = uncompressed_size as f64 / compressed_size as f64;
 
         let column_metadata = (0..rg_md.num_columns())
             .map(|col_idx| RowGroupColumnMetadata::from_file_reader(reader, idx, col_idx))
@@ -197,15 +271,11 @@ macro_rules! extract_stat_value {
 
 impl RowGroupColumnStats {
     fn new(stats: Option<&Statistics>) -> Option<Self> {
-        if let Some(stats) = stats {
-            Some(Self {
-                min: extract_stat_value!(stats, min_opt),
-                max: extract_stat_value!(stats, max_opt),
-                null_count: stats.null_count_opt(),
-                distinct_count: stats.distinct_count_opt(),
-            })
-        } else {
-            None
-        }
+        stats.map(|stats| Self {
+            min: extract_stat_value!(stats, min_opt),
+            max: extract_stat_value!(stats, max_opt),
+            null_count: stats.null_count_opt(),
+            distinct_count: stats.distinct_count_opt(),
+        })
     }
 }

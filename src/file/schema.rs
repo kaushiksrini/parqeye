@@ -8,6 +8,8 @@ use ratatui::{
     widgets::{Cell, Row},
 };
 
+use crate::file::utils::format_size;
+
 #[derive(Debug, Clone)]
 pub struct ColumnStats {
     pub min: Option<String>,
@@ -39,7 +41,7 @@ pub enum SchemaInfo {
     Primitive {
         name: String,
         display: String,
-        info: ColumnSchemaInfo,
+        info: Box<ColumnSchemaInfo>,
         stats: ColumnStats,
     },
     Group {
@@ -200,9 +202,26 @@ impl FileSchema {
 
     pub fn generate_table_rows_with_columns(
         &self,
-        selected_index: Option<usize>,
+        selected_index: usize,
         start_col: usize,
         num_cols: usize,
+    ) -> (Vec<Row>, Vec<usize>) {
+        self.generate_table_rows_with_scroll(
+            selected_index,
+            start_col,
+            num_cols,
+            0,
+            self.columns.len(),
+        )
+    }
+
+    pub fn generate_table_rows_with_scroll(
+        &self,
+        selected_index: usize,
+        start_col: usize,
+        num_cols: usize,
+        start_row: usize,
+        num_rows: usize,
     ) -> (Vec<Row>, Vec<usize>) {
         let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
         let mut column_widths = vec![0usize; num_cols];
@@ -210,7 +229,10 @@ impl FileSchema {
         let rows = self
             .columns
             .iter()
-            .filter_map(|col| {
+            .enumerate()
+            .skip(start_row + 1)
+            .take(num_rows)
+            .filter_map(|(_col_idx, col)| {
                 if let SchemaInfo::Primitive { info, stats, .. } = col {
                     let compression_ratio = if stats.total_uncompressed_size > 0 {
                         format!(
@@ -222,7 +244,8 @@ impl FileSchema {
                         "N/A".to_string()
                     };
 
-                    let is_selected = selected_index == Some(primitive_index);
+                    let is_selected =
+                        selected_index > 0 && (selected_index - start_row) == primitive_index;
 
                     // Create all cells first
                     let all_cells = vec![
@@ -295,9 +318,7 @@ impl FileSchema {
                         .into_iter()
                         .enumerate()
                         .map(|(idx, content)| {
-                            if idx == 0 {
-                                Cell::from(content.green())
-                            } else if idx == 1 {
+                            if idx == 0 || idx == 1 {
                                 Cell::from(content.green())
                             } else {
                                 Cell::from(content)
@@ -352,7 +373,7 @@ fn traverse(
         lines.push(SchemaInfo::Primitive {
             name: node.name().to_string(),
             display: line,
-            info,
+            info: Box::new(info),
             stats,
         });
 
@@ -415,12 +436,12 @@ fn aggregate_column_stats(
                         Some(distinct.unwrap_or(0) + stats.distinct_count_opt().unwrap_or(0));
 
                     if let Some(min_b) = stats.min_bytes_opt() {
-                        if min_bytes.as_ref().map_or(true, |mb| min_b < &mb[..]) {
+                        if min_bytes.as_ref().is_none_or(|mb| min_b < &mb[..]) {
                             min_bytes = Some(min_b.to_vec());
                         }
                     }
                     if let Some(max_b) = stats.max_bytes_opt() {
-                        if max_bytes.as_ref().map_or(true, |mb| max_b > &mb[..]) {
+                        if max_bytes.as_ref().is_none_or(|mb| max_b > &mb[..]) {
                             max_bytes = Some(max_b.to_vec());
                         }
                     }
@@ -552,24 +573,6 @@ fn logical_type_to_string(logical_type: &LogicalType) -> String {
                 }
             ),
         },
-        _ => format!("{:?}", logical_type),
-    }
-}
-
-/// Format byte size into human-readable format
-fn format_size(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut size = bytes as f64;
-    let mut unit_index = 0;
-
-    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_index += 1;
-    }
-
-    if unit_index == 0 {
-        format!("{} {}", bytes, UNITS[unit_index])
-    } else {
-        format!("{:.1} {}", size, UNITS[unit_index])
+        _ => format!("{logical_type:?}"),
     }
 }
