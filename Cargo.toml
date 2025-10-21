@@ -1,7 +1,7 @@
 [package]
 name = "parqeye"
 description = "Parquet viewer for the command line"
-version = "0.0.1"
+version = "0.0.2"
 readme = "README.md"
 license = "MIT"
 keywords = ["parquet", "parq", "visualizer", "schema", "tui"]
@@ -16,4 +16,4 @@ ratatui = "0.29.0"
 crossterm = "0.29.0"
 chrono = "0.4"                                          # for timestamp handling
 itertools = "0.14.0"
-polars = { version = "0.51.0", features = ["lazy", "parquet", "dtype-full"] } 
+polars = { version = "0.51.0", features = ["lazy", "parquet", "dtype-full", "timezones"] } 
