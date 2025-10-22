@@ -1,6 +1,6 @@
 # parqeye
 
-`parqeye` is a CLI Apache Parquet file viewer. It shows you the contents and metadata information that you can use to understand how the file is structured.
+`parqeye` lets you _peek inside_ your Parquet files. Instantly inspect their contents, schema, and metadata — right from your terminal.
 
 # Usage
 
