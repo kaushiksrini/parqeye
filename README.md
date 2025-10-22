@@ -4,7 +4,7 @@
 
 # Usage
 
-Run `parqeye` by providing to the path to the `.parquet` file.
+Run `parqeye` by providing the path to the `.parquet` file.
 
 ```
 parqeye <path-to-parquet-file>
@@ -22,6 +22,14 @@ You can build from source by downloading the repository and running the followin
 
 ```
 cargo build --release
+```
+
+## Build from Cargo
+
+If you use Rust, build directly from [crates.io](https://crates.io/crates/parqeye)
+
+```
+cargo install parqeye
 ```
 
 # License
