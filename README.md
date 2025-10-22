@@ -14,7 +14,7 @@ parqeye <path-to-parquet-file>
 
 ## Direct Download
 
-You can download the latest release from the [Releases](https://github.com/kaushik-srinivasan/parqeye/releases) page.
+You can download the latest release from the [Releases](https://github.com/kaushiksrini/parqeye/releases) page.
 
 ## Build from Source
 
