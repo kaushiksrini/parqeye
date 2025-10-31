@@ -46,7 +46,7 @@ impl Tab for VisualizeTab {
     fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error> {
         let max_rows = self.max_rows.unwrap_or(0);
         let visible_rows = state.visible_data_rows();
-        
+
         match key_event.code {
             // Row navigation (Up/Down arrows)
             KeyCode::Up => {

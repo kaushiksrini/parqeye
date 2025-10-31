@@ -145,7 +145,7 @@ impl FileSchema {
             .collect()
     }
 
-    pub fn generate_table_rows(&self, selected_index: Option<usize>) -> Vec<Row> {
+    pub fn generate_table_rows(&self, selected_index: Option<usize>) -> Vec<Row<'_>> {
         let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
 
         self.columns
@@ -205,7 +205,7 @@ impl FileSchema {
         selected_index: usize,
         start_col: usize,
         num_cols: usize,
-    ) -> (Vec<Row>, Vec<usize>) {
+    ) -> (Vec<Row<'_>>, Vec<usize>) {
         self.generate_table_rows_with_scroll(
             selected_index,
             start_col,
@@ -222,7 +222,7 @@ impl FileSchema {
         num_cols: usize,
         start_row: usize,
         num_rows: usize,
-    ) -> (Vec<Row>, Vec<usize>) {
+    ) -> (Vec<Row<'_>>, Vec<usize>) {
         let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
         let mut column_widths = vec![0usize; num_cols];
 
@@ -435,15 +435,15 @@ fn aggregate_column_stats(
                     distinct =
                         Some(distinct.unwrap_or(0) + stats.distinct_count_opt().unwrap_or(0));
 
-                    if let Some(min_b) = stats.min_bytes_opt() {
-                        if min_bytes.as_ref().is_none_or(|mb| min_b < &mb[..]) {
-                            min_bytes = Some(min_b.to_vec());
-                        }
+                    if let Some(min_b) = stats.min_bytes_opt()
+                        && min_bytes.as_ref().is_none_or(|mb| min_b < &mb[..])
+                    {
+                        min_bytes = Some(min_b.to_vec());
                     }
-                    if let Some(max_b) = stats.max_bytes_opt() {
-                        if max_bytes.as_ref().is_none_or(|mb| max_b > &mb[..]) {
-                            max_bytes = Some(max_b.to_vec());
-                        }
+                    if let Some(max_b) = stats.max_bytes_opt()
+                        && max_bytes.as_ref().is_none_or(|mb| max_b > &mb[..])
+                    {
+                        max_bytes = Some(max_b.to_vec());
                     }
                 }
                 compressed += col_meta.compressed_size() as u64;
@@ -574,5 +574,304 @@ fn logical_type_to_string(logical_type: &LogicalType) -> String {
             ),
         },
         _ => format!("{logical_type:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    use std::fs::File;
+
+    fn load_alltypes_schema() -> FileSchema {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data(),
+        );
+        let file = File::open(path).unwrap();
+        let reader = SerializedFileReader::try_from(file).unwrap();
+        let metadata = reader.metadata();
+        FileSchema::from_metadata(metadata).unwrap()
+    }
+
+    #[test]
+    fn test_file_alltypes_plain_basic() {
+        let file_schema = load_alltypes_schema();
+
+        // Test basic metrics
+        assert_eq!(11, file_schema.column_size());
+        assert_eq!(25, file_schema.tree_width());
+
+        // Should have root + 11 primitive columns = 12 total
+        assert!(file_schema.columns.len() >= 12);
+    }
+
+    #[test]
+    fn test_primitive_column_names() {
+        let file_schema = load_alltypes_schema();
+        let names = file_schema.primitive_column_names();
+
+        // alltypes_plain.parquet has these columns
+        assert_eq!(11, names.len());
+        assert!(names.contains(&"id".to_string()));
+        assert!(names.contains(&"bool_col".to_string()));
+        assert!(names.contains(&"tinyint_col".to_string()));
+        assert!(names.contains(&"smallint_col".to_string()));
+        assert!(names.contains(&"int_col".to_string()));
+        assert!(names.contains(&"bigint_col".to_string()));
+        assert!(names.contains(&"float_col".to_string()));
+        assert!(names.contains(&"double_col".to_string()));
+        assert!(names.contains(&"date_string_col".to_string()));
+        assert!(names.contains(&"string_col".to_string()));
+        assert!(names.contains(&"timestamp_col".to_string()));
+    }
+
+    #[test]
+    fn test_column_group_name() {
+        let file_schema = load_alltypes_schema();
+
+        // First column after root should be 'id'
+        assert_eq!("id", file_schema.column_group_name(1));
+
+        // Get a few more column names
+        let names = file_schema.primitive_column_names();
+        assert!(!names.is_empty());
+    }
+
+    #[test]
+    fn test_column_stats() {
+        let file_schema = load_alltypes_schema();
+
+        // Find the 'id' column and check its stats
+        for col in &file_schema.columns {
+            if let SchemaInfo::Primitive { name, stats, .. } = col
+                && name == "id"
+            {
+                // alltypes_plain has 8 rows with id from 0 to 7
+                assert_eq!(stats.min, None);
+                assert_eq!(stats.max, None);
+                assert_eq!(stats.nulls, 0);
+
+                // Should have compression stats
+                assert!(stats.total_compressed_size > 0);
+                assert!(stats.total_uncompressed_size > 0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_column_schema_info() {
+        let file_schema = load_alltypes_schema();
+
+        // Check the schema info for specific columns
+        for col in &file_schema.columns {
+            if let SchemaInfo::Primitive { name, info, .. } = col {
+                match name.as_str() {
+                    "id" => {
+                        assert_eq!(info.physical, "INT32");
+                        assert!(!info.repetition.is_empty());
+                    }
+                    "bool_col" => {
+                        assert_eq!(info.physical, "BOOLEAN");
+                    }
+                    "float_col" => {
+                        assert_eq!(info.physical, "FLOAT");
+                    }
+                    "double_col" => {
+                        assert_eq!(info.physical, "DOUBLE");
+                    }
+                    "bigint_col" => {
+                        assert_eq!(info.physical, "INT64");
+                    }
+                    "string_col" | "date_string_col" => {
+                        assert_eq!(info.physical, "BYTE_ARRAY");
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_generate_table_rows() {
+        let file_schema = load_alltypes_schema();
+
+        // Generate rows with no selection
+        let rows = file_schema.generate_table_rows(None);
+
+        // Should have 11 primitive columns
+        assert_eq!(11, rows.len());
+
+        // Generate rows with selection
+        let rows_selected = file_schema.generate_table_rows(Some(1));
+        assert_eq!(11, rows_selected.len());
+    }
+
+    #[test]
+    fn test_generate_table_rows_with_columns() {
+        let file_schema = load_alltypes_schema();
+
+        // Test with different column ranges
+        let (rows, widths) = file_schema.generate_table_rows_with_columns(1, 0, 5);
+
+        // Should have rows for primitive columns
+        assert!(!rows.is_empty());
+
+        // Should have width info for 5 columns
+        assert_eq!(5, widths.len());
+
+        // All widths should be non-zero (content should exist)
+        for width in &widths {
+            assert!(*width > 0);
+        }
+    }
+
+    #[test]
+    fn test_generate_table_rows_with_scroll() {
+        let file_schema = load_alltypes_schema();
+
+        // Test scrolling with start_row and limited rows
+        let (rows, widths) = file_schema.generate_table_rows_with_scroll(
+            1,  // selected_index
+            0,  // start_col
+            10, // num_cols
+            0,  // start_row
+            5,  // num_rows (limit to 5)
+        );
+
+        // Should have at most 5 rows
+        assert!(rows.len() <= 5);
+
+        // Should have width info for 10 columns
+        assert_eq!(10, widths.len());
+    }
+
+    #[test]
+    fn test_schema_info_types() {
+        let file_schema = load_alltypes_schema();
+
+        // First item should be root
+        assert!(matches!(&file_schema.columns[0], SchemaInfo::Root { .. }));
+
+        // Count different types
+        let mut root_count = 0;
+        let mut primitive_count = 0;
+        let mut group_count = 0;
+
+        for col in &file_schema.columns {
+            match col {
+                SchemaInfo::Root { .. } => root_count += 1,
+                SchemaInfo::Primitive { .. } => primitive_count += 1,
+                SchemaInfo::Group { .. } => group_count += 1,
+            }
+        }
+
+        assert_eq!(1, root_count);
+        assert_eq!(11, primitive_count);
+        // alltypes_plain doesn't have nested groups (flat schema)
+        assert_eq!(0, group_count);
+    }
+
+    #[test]
+    fn test_column_display_strings() {
+        let file_schema = load_alltypes_schema();
+
+        // Check that display strings are properly formatted
+        for col in &file_schema.columns {
+            match col {
+                SchemaInfo::Root { display, .. } => {
+                    assert!(display.contains("root"));
+                }
+                SchemaInfo::Primitive { name, display, .. } => {
+                    assert!(display.contains(name));
+                }
+                SchemaInfo::Group { name, display, .. } => {
+                    assert!(display.contains(name));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_compression_ratio_calculation() {
+        let file_schema = load_alltypes_schema();
+
+        // Check that compression ratios are calculated correctly
+        for col in &file_schema.columns {
+            if let SchemaInfo::Primitive { stats, .. } = col
+                && stats.total_uncompressed_size > 0
+                && stats.total_compressed_size > 0
+            {
+                let ratio =
+                    stats.total_uncompressed_size as f64 / stats.total_compressed_size as f64;
+
+                // Compression ratio should be reasonable (between 0.5x and 10x)
+                assert!(ratio > 0.5 && ratio < 10.0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_decode_value_int32() {
+        let value = decode_value(&[42, 0, 0, 0], PhysicalType::INT32);
+        assert_eq!(value, "42");
+
+        let negative = decode_value(&[255, 255, 255, 255], PhysicalType::INT32);
+        assert_eq!(negative, "-1");
+    }
+
+    #[test]
+    fn test_decode_value_int64() {
+        let value = decode_value(&[42, 0, 0, 0, 0, 0, 0, 0], PhysicalType::INT64);
+        assert_eq!(value, "42");
+    }
+
+    #[test]
+    fn test_decode_value_float() {
+        let bytes = std::f32::consts::PI.to_le_bytes();
+        let value = decode_value(&bytes, PhysicalType::FLOAT);
+        assert!(value.starts_with("3.14"));
+    }
+
+    #[test]
+    fn test_decode_value_double() {
+        let bytes = std::f64::consts::PI.to_le_bytes();
+        let value = decode_value(&bytes, PhysicalType::DOUBLE);
+        assert!(value.starts_with("3.141"));
+    }
+
+    #[test]
+    fn test_decode_value_byte_array() {
+        let text = "hello";
+        let value = decode_value(text.as_bytes(), PhysicalType::BYTE_ARRAY);
+        assert_eq!(value, "hello");
+
+        // Test non-UTF8 bytes (should return hex)
+        let binary = [0xFF, 0xFE, 0xFD];
+        let value = decode_value(&binary, PhysicalType::BYTE_ARRAY);
+        assert_eq!(value, "FFFEFD");
+    }
+
+    #[test]
+    fn test_logical_type_to_string() {
+        // Test Decimal
+        let decimal = LogicalType::Decimal {
+            scale: 2,
+            precision: 10,
+        };
+        assert_eq!(logical_type_to_string(&decimal), "Decimal(2,10)");
+
+        // Test Integer
+        let integer = LogicalType::Integer {
+            bit_width: 32,
+            is_signed: true,
+        };
+        assert_eq!(logical_type_to_string(&integer), "Integer(32,sign)");
+
+        let unsigned = LogicalType::Integer {
+            bit_width: 16,
+            is_signed: false,
+        };
+        assert_eq!(logical_type_to_string(&unsigned), "Integer(16,unsign)");
     }
 }
