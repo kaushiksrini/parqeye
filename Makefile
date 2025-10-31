@@ -12,9 +12,6 @@ check-fmt: ## Check the formatting of the code
 check-clippy: ## Check the clippy of the code
 	cargo  clippy --all-targets --all-features --workspace -- -D warnings
 
-install-cargo-machete: ## Install the cargo machete
-	cargo install cargo-machete@0.7.0
-
 check: check-fmt check-clippy
 
 doc-test: ## Test the documentation of the code
