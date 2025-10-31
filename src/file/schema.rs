@@ -601,7 +601,7 @@ mod tests {
         // Test basic metrics
         assert_eq!(11, file_schema.column_size());
         assert_eq!(25, file_schema.tree_width());
-        
+
         // Should have root + 11 primitive columns = 12 total
         assert!(file_schema.columns.len() >= 12);
     }
@@ -610,7 +610,7 @@ mod tests {
     fn test_primitive_column_names() {
         let file_schema = load_alltypes_schema();
         let names = file_schema.primitive_column_names();
-        
+
         // alltypes_plain.parquet has these columns
         assert_eq!(11, names.len());
         assert!(names.contains(&"id".to_string()));
@@ -629,10 +629,10 @@ mod tests {
     #[test]
     fn test_column_group_name() {
         let file_schema = load_alltypes_schema();
-        
+
         // First column after root should be 'id'
         assert_eq!("id", file_schema.column_group_name(1));
-        
+
         // Get a few more column names
         let names = file_schema.primitive_column_names();
         assert!(!names.is_empty());
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn test_column_stats() {
         let file_schema = load_alltypes_schema();
-        
+
         // Find the 'id' column and check its stats
         for col in &file_schema.columns {
             if let SchemaInfo::Primitive { name, stats, .. } = col {
@@ -650,7 +650,7 @@ mod tests {
                     assert_eq!(stats.min, None);
                     assert_eq!(stats.max, None);
                     assert_eq!(stats.nulls, 0);
-                    
+
                     // Should have compression stats
                     assert!(stats.total_compressed_size > 0);
                     assert!(stats.total_uncompressed_size > 0);
@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn test_column_schema_info() {
         let file_schema = load_alltypes_schema();
-        
+
         // Check the schema info for specific columns
         for col in &file_schema.columns {
             if let SchemaInfo::Primitive { name, info, .. } = col {
@@ -695,13 +695,13 @@ mod tests {
     #[test]
     fn test_generate_table_rows() {
         let file_schema = load_alltypes_schema();
-        
+
         // Generate rows with no selection
         let rows = file_schema.generate_table_rows(None);
-        
+
         // Should have 11 primitive columns
         assert_eq!(11, rows.len());
-        
+
         // Generate rows with selection
         let rows_selected = file_schema.generate_table_rows(Some(1));
         assert_eq!(11, rows_selected.len());
@@ -710,16 +710,16 @@ mod tests {
     #[test]
     fn test_generate_table_rows_with_columns() {
         let file_schema = load_alltypes_schema();
-        
+
         // Test with different column ranges
         let (rows, widths) = file_schema.generate_table_rows_with_columns(1, 0, 5);
-        
+
         // Should have rows for primitive columns
         assert!(!rows.is_empty());
-        
+
         // Should have width info for 5 columns
         assert_eq!(5, widths.len());
-        
+
         // All widths should be non-zero (content should exist)
         for width in &widths {
             assert!(*width > 0);
@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn test_generate_table_rows_with_scroll() {
         let file_schema = load_alltypes_schema();
-        
+
         // Test scrolling with start_row and limited rows
         let (rows, widths) = file_schema.generate_table_rows_with_scroll(
             1,  // selected_index
@@ -738,10 +738,10 @@ mod tests {
             0,  // start_row
             5,  // num_rows (limit to 5)
         );
-        
+
         // Should have at most 5 rows
         assert!(rows.len() <= 5);
-        
+
         // Should have width info for 10 columns
         assert_eq!(10, widths.len());
     }
@@ -749,18 +749,15 @@ mod tests {
     #[test]
     fn test_schema_info_types() {
         let file_schema = load_alltypes_schema();
-        
+
         // First item should be root
-        assert!(matches!(
-            &file_schema.columns[0],
-            SchemaInfo::Root { .. }
-        ));
-        
+        assert!(matches!(&file_schema.columns[0], SchemaInfo::Root { .. }));
+
         // Count different types
         let mut root_count = 0;
         let mut primitive_count = 0;
         let mut group_count = 0;
-        
+
         for col in &file_schema.columns {
             match col {
                 SchemaInfo::Root { .. } => root_count += 1,
@@ -768,7 +765,7 @@ mod tests {
                 SchemaInfo::Group { .. } => group_count += 1,
             }
         }
-        
+
         assert_eq!(1, root_count);
         assert_eq!(11, primitive_count);
         // alltypes_plain doesn't have nested groups (flat schema)
@@ -778,7 +775,7 @@ mod tests {
     #[test]
     fn test_column_display_strings() {
         let file_schema = load_alltypes_schema();
-        
+
         // Check that display strings are properly formatted
         for col in &file_schema.columns {
             match col {
@@ -798,14 +795,14 @@ mod tests {
     #[test]
     fn test_compression_ratio_calculation() {
         let file_schema = load_alltypes_schema();
-        
+
         // Check that compression ratios are calculated correctly
         for col in &file_schema.columns {
             if let SchemaInfo::Primitive { stats, .. } = col {
                 if stats.total_uncompressed_size > 0 && stats.total_compressed_size > 0 {
-                    let ratio = stats.total_uncompressed_size as f64 
-                              / stats.total_compressed_size as f64;
-                    
+                    let ratio =
+                        stats.total_uncompressed_size as f64 / stats.total_compressed_size as f64;
+
                     // Compression ratio should be reasonable (between 0.5x and 10x)
                     assert!(ratio > 0.5 && ratio < 10.0);
                 }
@@ -817,7 +814,7 @@ mod tests {
     fn test_decode_value_int32() {
         let value = decode_value(&[42, 0, 0, 0], PhysicalType::INT32);
         assert_eq!(value, "42");
-        
+
         let negative = decode_value(&[255, 255, 255, 255], PhysicalType::INT32);
         assert_eq!(negative, "-1");
     }
@@ -830,14 +827,14 @@ mod tests {
 
     #[test]
     fn test_decode_value_float() {
-        let bytes = 3.14_f32.to_le_bytes();
+        let bytes = std::f32::consts::PI.to_le_bytes();
         let value = decode_value(&bytes, PhysicalType::FLOAT);
         assert!(value.starts_with("3.14"));
     }
 
     #[test]
     fn test_decode_value_double() {
-        let bytes = 3.14159_f64.to_le_bytes();
+        let bytes = std::f64::consts::PI.to_le_bytes();
         let value = decode_value(&bytes, PhysicalType::DOUBLE);
         assert!(value.starts_with("3.141"));
     }
@@ -847,7 +844,7 @@ mod tests {
         let text = "hello";
         let value = decode_value(text.as_bytes(), PhysicalType::BYTE_ARRAY);
         assert_eq!(value, "hello");
-        
+
         // Test non-UTF8 bytes (should return hex)
         let binary = [0xFF, 0xFE, 0xFD];
         let value = decode_value(&binary, PhysicalType::BYTE_ARRAY);
@@ -862,14 +859,14 @@ mod tests {
             precision: 10,
         };
         assert_eq!(logical_type_to_string(&decimal), "Decimal(2,10)");
-        
+
         // Test Integer
         let integer = LogicalType::Integer {
             bit_width: 32,
             is_signed: true,
         };
         assert_eq!(logical_type_to_string(&integer), "Integer(32,sign)");
-        
+
         let unsigned = LogicalType::Integer {
             bit_width: 16,
             is_signed: false,

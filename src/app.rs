@@ -138,7 +138,8 @@ impl AppState {
 
     pub fn page_down(&mut self, visible_rows: usize, max_rows: usize) {
         // Move selection down by visible_rows, clamped to max_rows - 1
-        self.vertical_offset = (self.vertical_offset + visible_rows).min(max_rows.saturating_sub(1));
+        self.vertical_offset =
+            (self.vertical_offset + visible_rows).min(max_rows.saturating_sub(1));
         // Adjust scroll to keep selection visible
         self.adjust_scroll_to_selection(visible_rows, max_rows);
     }
@@ -152,7 +153,7 @@ impl AppState {
             // Selection is below viewport, scroll down
             self.data_vertical_scroll = self.vertical_offset.saturating_sub(visible_rows - 1);
         }
-        
+
         // Clamp scroll to valid range
         let max_scroll = max_rows.saturating_sub(visible_rows);
         self.data_vertical_scroll = self.data_vertical_scroll.min(max_scroll);
@@ -161,9 +162,8 @@ impl AppState {
 
 impl<'a> App<'a> {
     pub fn new(file_info: &'a ParquetCtx) -> Self {
-        let sample_data_rows = file_info
-            .sample_data.total_rows;
-        
+        let sample_data_rows = file_info.sample_data.total_rows;
+
         let tab_manager = TabManager::new(
             file_info.schema.column_size(),
             file_info.row_groups.num_row_groups(),
@@ -186,7 +186,7 @@ impl<'a> App<'a> {
             // Account for: header (3 lines), footer (1 line), table header (3 lines) = 7 lines total
             let visible_data_rows = (terminal_size.height.saturating_sub(7) as usize).max(1);
             self.state.set_visible_data_rows(visible_data_rows);
-            
+
             let render_view = AppRenderView::from_app(self);
             terminal.draw(|frame| crate::ui::render_app(&render_view, frame))?;
             self.handle_events()?;

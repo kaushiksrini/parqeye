@@ -5,7 +5,6 @@ pub mod sample_data;
 pub mod schema;
 pub mod utils;
 
-
 use std::{env, error::Error, path::PathBuf};
 
 use ratatui::{buffer::Buffer, layout::Rect};
@@ -21,7 +20,6 @@ pub fn parquet_test_data() -> String {
         Err(err) => panic!("failed to get parquet data dir: {err}"),
     }
 }
-
 
 /// From Arrow Crate
 /// Returns a directory path for finding test data.

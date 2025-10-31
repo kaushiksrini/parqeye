@@ -138,10 +138,10 @@ mod tests {
         // Test maximum values
         assert!(human_readable_bytes(u64::MAX).contains("TiB"));
         assert!(human_readable_count(u64::MAX).contains("B"));
-        
+
         // Test empty string truncation
         assert_eq!(truncate_str("", 0), "");
-        
+
         // Test single digit comma formatting
         assert_eq!(commas(1), "1");
     }

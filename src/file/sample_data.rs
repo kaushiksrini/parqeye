@@ -49,7 +49,7 @@ impl ParquetSampleData {
             total_columns,
             flattened_columns,
             rows,
-            total_rows: df.height() as usize,
+            total_rows: df.height(),
         })
     }
 

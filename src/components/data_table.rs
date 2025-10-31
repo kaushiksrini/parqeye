@@ -171,19 +171,19 @@ impl<'a> Widget for DataTable<'a> {
             .map(|(row_idx, row_data)| {
                 // Calculate actual row number (accounting for vertical scroll)
                 let actual_row_num = row_idx + self.vertical_scroll + 1;
-                let is_selected = self.selected_row.map_or(false, |selected| {
-                    actual_row_num - 1 == selected
-                });
+                let is_selected = self
+                    .selected_row
+                    .is_some_and(|selected| actual_row_num - 1 == selected);
 
                 // Create cells with row number first
                 let row_num_cell = if is_selected {
-                    Cell::from(format!("{:>4}", actual_row_num))
+                    Cell::from(format!("{actual_row_num:>4}"))
                         .fg(Color::White)
                         .underlined()
                 } else {
-                    Cell::from(format!("{:>4}", actual_row_num)).fg(Color::DarkGray)
+                    Cell::from(format!("{actual_row_num:>4}")).fg(Color::DarkGray)
                 };
-                
+
                 let mut cells: Vec<Cell> = vec![row_num_cell];
 
                 // Add data cells
@@ -225,7 +225,6 @@ impl<'a> Widget for DataTable<'a> {
             Cell::from(format!(" {truncated}")).bold().fg(Color::Yellow)
         }));
 
-
         let [header_area, content_area] =
             Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
@@ -237,7 +236,7 @@ impl<'a> Widget for DataTable<'a> {
                     .borders(Borders::BOTTOM | Borders::TOP)
                     .border_set(self.border_style)
                     .title(
-                        Line::from(format!("{}", self.title))
+                        Line::from(self.title.to_string())
                             .centered()
                             .bold()
                             .fg(self.title_color),
