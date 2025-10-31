@@ -1,5 +1,10 @@
 # parqeye
 
+[![CI][actions-badge]][actions-url]
+
+[actions-badge]: https://github.com/kaushiksrini/parqeye/actions/workflows/ci.yaml/badge.svg
+[actions-url]: https://github.com/kaushiksrini/parqeye/actions/workflows/ci.yaml
+
 `parqeye` lets you _peek inside_ your Parquet files. Instantly inspect their contents, schema, and metadata — right from your terminal.
 
 # Usage
