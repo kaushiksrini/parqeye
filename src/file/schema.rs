@@ -145,7 +145,7 @@ impl FileSchema {
             .collect()
     }
 
-    pub fn generate_table_rows(&self, selected_index: Option<usize>) -> Vec<Row> {
+    pub fn generate_table_rows(&self, selected_index: Option<usize>) -> Vec<Row<'_>> {
         let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
 
         self.columns
@@ -205,7 +205,7 @@ impl FileSchema {
         selected_index: usize,
         start_col: usize,
         num_cols: usize,
-    ) -> (Vec<Row>, Vec<usize>) {
+    ) -> (Vec<Row<'_>>, Vec<usize>) {
         self.generate_table_rows_with_scroll(
             selected_index,
             start_col,
@@ -222,7 +222,7 @@ impl FileSchema {
         num_cols: usize,
         start_row: usize,
         num_rows: usize,
-    ) -> (Vec<Row>, Vec<usize>) {
+    ) -> (Vec<Row<'_>>, Vec<usize>) {
         let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
         let mut column_widths = vec![0usize; num_cols];
 
@@ -435,15 +435,15 @@ fn aggregate_column_stats(
                     distinct =
                         Some(distinct.unwrap_or(0) + stats.distinct_count_opt().unwrap_or(0));
 
-                    if let Some(min_b) = stats.min_bytes_opt() {
-                        if min_bytes.as_ref().is_none_or(|mb| min_b < &mb[..]) {
-                            min_bytes = Some(min_b.to_vec());
-                        }
+                    if let Some(min_b) = stats.min_bytes_opt()
+                        && min_bytes.as_ref().is_none_or(|mb| min_b < &mb[..])
+                    {
+                        min_bytes = Some(min_b.to_vec());
                     }
-                    if let Some(max_b) = stats.max_bytes_opt() {
-                        if max_bytes.as_ref().is_none_or(|mb| max_b > &mb[..]) {
-                            max_bytes = Some(max_b.to_vec());
-                        }
+                    if let Some(max_b) = stats.max_bytes_opt()
+                        && max_bytes.as_ref().is_none_or(|mb| max_b > &mb[..])
+                    {
+                        max_bytes = Some(max_b.to_vec());
                     }
                 }
                 compressed += col_meta.compressed_size() as u64;
@@ -644,17 +644,17 @@ mod tests {
 
         // Find the 'id' column and check its stats
         for col in &file_schema.columns {
-            if let SchemaInfo::Primitive { name, stats, .. } = col {
-                if name == "id" {
-                    // alltypes_plain has 8 rows with id from 0 to 7
-                    assert_eq!(stats.min, None);
-                    assert_eq!(stats.max, None);
-                    assert_eq!(stats.nulls, 0);
+            if let SchemaInfo::Primitive { name, stats, .. } = col
+                && name == "id"
+            {
+                // alltypes_plain has 8 rows with id from 0 to 7
+                assert_eq!(stats.min, None);
+                assert_eq!(stats.max, None);
+                assert_eq!(stats.nulls, 0);
 
-                    // Should have compression stats
-                    assert!(stats.total_compressed_size > 0);
-                    assert!(stats.total_uncompressed_size > 0);
-                }
+                // Should have compression stats
+                assert!(stats.total_compressed_size > 0);
+                assert!(stats.total_uncompressed_size > 0);
             }
         }
     }
@@ -798,14 +798,15 @@ mod tests {
 
         // Check that compression ratios are calculated correctly
         for col in &file_schema.columns {
-            if let SchemaInfo::Primitive { stats, .. } = col {
-                if stats.total_uncompressed_size > 0 && stats.total_compressed_size > 0 {
-                    let ratio =
-                        stats.total_uncompressed_size as f64 / stats.total_compressed_size as f64;
+            if let SchemaInfo::Primitive { stats, .. } = col
+                && stats.total_uncompressed_size > 0
+                && stats.total_compressed_size > 0
+            {
+                let ratio =
+                    stats.total_uncompressed_size as f64 / stats.total_compressed_size as f64;
 
-                    // Compression ratio should be reasonable (between 0.5x and 10x)
-                    assert!(ratio > 0.5 && ratio < 10.0);
-                }
+                // Compression ratio should be reasonable (between 0.5x and 10x)
+                assert!(ratio > 0.5 && ratio < 10.0);
             }
         }
     }

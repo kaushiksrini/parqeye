@@ -178,11 +178,12 @@ impl<'a> RowGroupColumnMetadataComponent<'a> {
             let symbol_x = inner.x + inner.width / 2;
             let symbol_y = inner.y + inner.height / 2;
 
-            if symbol_x < inner.x + inner.width && symbol_y < inner.y + inner.height {
-                if let Some(cell) = buf.cell_mut(Position::new(symbol_x, symbol_y)) {
-                    cell.set_symbol(symbol)
-                        .set_style(ratatui::style::Style::default().fg(color).bold());
-                }
+            if symbol_x < inner.x + inner.width
+                && symbol_y < inner.y + inner.height
+                && let Some(cell) = buf.cell_mut(Position::new(symbol_x, symbol_y))
+            {
+                cell.set_symbol(symbol)
+                    .set_style(ratatui::style::Style::default().fg(color).bold());
             }
         }
     }
