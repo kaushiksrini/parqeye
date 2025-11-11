@@ -7,6 +7,8 @@
 
 `parqeye` lets you _peek inside_ your Parquet files. Instantly inspect their contents, schema, and metadata — right from your terminal.
 
+![Demo](.github/assets/demo.gif)
+
 # Usage
 
 Run `parqeye` by providing the path to the `.parquet` file.
