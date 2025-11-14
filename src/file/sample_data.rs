@@ -14,7 +14,7 @@ impl ParquetSampleData {
     pub fn read_sample_data(
         file_path: &str,
     ) -> Result<ParquetSampleData, Box<dyn std::error::Error>> {
-        const MAX_ROWS: usize = 100;
+        const MAX_ROWS: usize = 200;
 
         // Read parquet file using polars LazyFrame
         let df = LazyFrame::scan_parquet(PlPath::new(file_path), Default::default())?

@@ -122,31 +122,33 @@ impl<'a> DataTable<'a> {
 
     fn render_header_separator(&self, buf: &mut Buffer, area: Rect, x_row_separator: u16, y: u16) {
         let border_style = ratatui::style::Style::default().fg(self.border_color);
-        
+
         // Draw horizontal line
         for x in 0..area.width {
             if let Some(cell) = buf.cell_mut(Position::new(x, y - 1)) {
                 cell.set_symbol(line::HORIZONTAL).set_style(border_style);
             }
         }
-        
+
         // Intersection with row number separator
         if let Some(cell) = buf.cell_mut(Position::new(x_row_separator - 1, y - 1)) {
-            cell.set_symbol(line::HORIZONTAL_DOWN).set_style(border_style);
+            cell.set_symbol(line::HORIZONTAL_DOWN)
+                .set_style(border_style);
         }
     }
 
     fn render_row_numbers(&self, buf: &mut Buffer, area: Rect, rows: &[Vec<String>]) {
         let mut y = area.y;
-        
+
         for (row_idx, _) in rows.iter().enumerate() {
             let actual_row_num = row_idx + self.vertical_scroll + 1;
             let is_selected = self
                 .selected_row
                 .is_some_and(|selected| row_idx + self.vertical_scroll == selected);
-            
+
             let row_num_formatted = format!("{}", actual_row_num);
-            let mut style: ratatui::prelude::Style = ratatui::style::Style::default().fg(Color::DarkGray);
+            let mut style: ratatui::prelude::Style =
+                ratatui::style::Style::default().fg(Color::DarkGray);
             if is_selected {
                 style = style
                     .add_modifier(Modifier::BOLD)
@@ -171,24 +173,27 @@ impl<'a> DataTable<'a> {
         max_width: u16,
     ) {
         let mut x_offset = x_start;
-        
+
         for (header, &width) in headers.iter().zip(column_widths) {
             if x_offset >= max_width {
                 break;
             }
-            
+
             let effective_width = width.saturating_sub(NUM_SPACES_BETWEEN_COLUMNS);
             let truncated = if header.len() > effective_width as usize {
-                format!("{}...", &header[..effective_width.saturating_sub(3) as usize])
+                format!(
+                    "{}...",
+                    &header[..effective_width.saturating_sub(3) as usize]
+                )
             } else {
                 header.clone()
             };
-            
+
             let style = ratatui::style::Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD);
             let span = Span::styled(truncated, style);
-            
+
             buf.set_span(x_offset, y, &span, width);
             x_offset += width;
         }
@@ -205,7 +210,7 @@ impl<'a> DataTable<'a> {
         max_width: u16,
     ) {
         let mut x_offset = x_start;
-        
+
         let style = if is_selected {
             ratatui::style::Style::default()
                 .bg(self.selected_color)
@@ -214,24 +219,27 @@ impl<'a> DataTable<'a> {
         } else {
             ratatui::style::Style::default()
         };
-        
+
         for (cell_data, &width) in row_data.iter().zip(column_widths) {
             if x_offset >= max_width {
                 break;
             }
-            
+
             let effective_width = width.saturating_sub(NUM_SPACES_BETWEEN_COLUMNS);
             let truncated = if cell_data.chars().count() > effective_width as usize {
-                let truncated_chars: String = cell_data.chars().take(effective_width.saturating_sub(1) as usize).collect();
+                let truncated_chars: String = cell_data
+                    .chars()
+                    .take(effective_width.saturating_sub(1) as usize)
+                    .collect();
                 format!("{}…", truncated_chars)
             } else {
                 cell_data.clone()
             };
-            
+
             // Pad with spaces to fill the column width
             let padded = format!("{:width$}", truncated, width = width as usize);
             let span = Span::styled(padded, style);
-            
+
             buf.set_span(x_offset, y, &span, width);
             x_offset += width;
         }
@@ -245,7 +253,7 @@ impl<'a> DataTable<'a> {
         height: u16,
     ) {
         let border_style = ratatui::style::Style::default().fg(self.border_color);
-        
+
         // Draw vertical line after row numbers
         for y in y_start..(y_start + height) {
             if let Some(cell) = buf.cell_mut(Position::new(x_row_separator - 1, y)) {
@@ -268,10 +276,8 @@ impl<'a> Widget for DataTable<'a> {
         let x_row_separator = max_row_num_length + NUM_SPACES_AFTER_LINE_NUMBER + 1;
 
         // Calculate available width for data columns
-        let available_width = area
-            .width
-            .saturating_sub(row_num_section_width);
-        
+        let available_width = area.width.saturating_sub(row_num_section_width);
+
         let min_column_width = 12;
         let max_visible_columns = (available_width / min_column_width).max(1) as usize;
 
@@ -346,7 +352,7 @@ impl<'a> Widget for DataTable<'a> {
             let is_selected = self
                 .selected_row
                 .is_some_and(|selected| actual_row_num == selected);
-            
+
             self.render_data_row(
                 buf,
                 row_num_section_width,

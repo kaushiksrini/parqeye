@@ -87,7 +87,7 @@ impl<'a> RowGroupColumnMetadataComponent<'a> {
         };
 
         let kv_pairs = vec![
-            ("File Offset", self.column_metadata.file_offset.to_string()),
+            ("File Offset (B)", commas(self.column_metadata.file_offset)),
             (
                 "Compressed Size",
                 human_readable_bytes(self.column_metadata.total_compressed_size as u64),
