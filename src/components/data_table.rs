@@ -1,16 +1,19 @@
 use crate::file::sample_data::ParquetSampleData;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
-    prelude::Color,
-    style::Stylize,
-    symbols::border,
-    text::Line,
-    widgets::{Block, Borders, Cell, Row, Table, Widget},
+    layout::Rect,
+    prelude::{Color, Position},
+    style::Modifier,
+    symbols::{border, line},
+    text::Span,
+    widgets::Widget,
 };
 use std::cmp::min;
 
 use crate::file::Renderable;
+
+const NUM_SPACES_BETWEEN_COLUMNS: u16 = 2;
+const NUM_SPACES_AFTER_LINE_NUMBER: u16 = 2;
 
 pub struct DataTable<'a> {
     pub data: &'a ParquetSampleData,
@@ -21,6 +24,7 @@ pub struct DataTable<'a> {
     pub vertical_scroll: usize,
     pub selected_row: Option<usize>,
     pub selected_color: Color,
+    pub border_color: Color,
 }
 
 impl<'a> DataTable<'a> {
@@ -34,6 +38,7 @@ impl<'a> DataTable<'a> {
             vertical_scroll: 0,
             selected_row: None,
             selected_color: Color::Rgb(60, 60, 60),
+            border_color: Color::DarkGray,
         }
     }
 
@@ -95,7 +100,7 @@ impl<'a> DataTable<'a> {
         &self,
         headers: &[String],
         visible_rows: &[Vec<String>],
-    ) -> Vec<usize> {
+    ) -> Vec<u16> {
         let mut widths = Vec::new();
 
         for (col_idx, header) in headers.iter().enumerate() {
@@ -108,19 +113,172 @@ impl<'a> DataTable<'a> {
                 }
             }
 
-            // Use minimum width of 8 and maximum of 25 for readability
-            widths.push(min(max_width.max(8), 25));
+            // Use minimum width of 8 and maximum of 25 for readability, add spacing
+            widths.push((min(max_width.max(8), 25) as u16) + NUM_SPACES_BETWEEN_COLUMNS);
         }
 
         widths
+    }
+
+    fn render_header_separator(&self, buf: &mut Buffer, area: Rect, x_row_separator: u16, y: u16) {
+        let border_style = ratatui::style::Style::default().fg(self.border_color);
+
+        // Draw horizontal line
+        for x in 0..area.width {
+            if let Some(cell) = buf.cell_mut(Position::new(x, y - 1)) {
+                cell.set_symbol(line::HORIZONTAL).set_style(border_style);
+            }
+        }
+
+        // Intersection with row number separator
+        if let Some(cell) = buf.cell_mut(Position::new(x_row_separator - 1, y - 1)) {
+            cell.set_symbol(line::HORIZONTAL_DOWN)
+                .set_style(border_style);
+        }
+    }
+
+    fn render_row_numbers(&self, buf: &mut Buffer, area: Rect, rows: &[Vec<String>]) {
+        let mut y = area.y;
+
+        for (row_idx, _) in rows.iter().enumerate() {
+            let actual_row_num = row_idx + self.vertical_scroll + 1;
+            let is_selected = self
+                .selected_row
+                .is_some_and(|selected| row_idx + self.vertical_scroll == selected);
+
+            let row_num_formatted = format!("{}", actual_row_num);
+            let mut style: ratatui::prelude::Style =
+                ratatui::style::Style::default().fg(Color::DarkGray);
+            if is_selected {
+                style = style
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::UNDERLINED);
+            }
+            let span = Span::styled(row_num_formatted, style);
+            buf.set_span(0, y, &span, area.width);
+            y += 1;
+            if y >= area.bottom() {
+                break;
+            }
+        }
+    }
+
+    fn render_header(
+        &self,
+        buf: &mut Buffer,
+        x_start: u16,
+        y: u16,
+        headers: &[String],
+        column_widths: &[u16],
+        max_width: u16,
+    ) {
+        let mut x_offset = x_start;
+
+        for (header, &width) in headers.iter().zip(column_widths) {
+            if x_offset >= max_width {
+                break;
+            }
+
+            let effective_width = width.saturating_sub(NUM_SPACES_BETWEEN_COLUMNS);
+            let truncated = if header.len() > effective_width as usize {
+                format!(
+                    "{}...",
+                    &header[..effective_width.saturating_sub(3) as usize]
+                )
+            } else {
+                header.clone()
+            };
+
+            let style = ratatui::style::Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
+            let span = Span::styled(truncated, style);
+
+            buf.set_span(x_offset, y, &span, width);
+            x_offset += width;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_data_row(
+        &self,
+        buf: &mut Buffer,
+        x_start: u16,
+        y: u16,
+        row_data: &[String],
+        column_widths: &[u16],
+        is_selected: bool,
+        max_width: u16,
+    ) {
+        let mut x_offset = x_start;
+
+        let style = if is_selected {
+            ratatui::style::Style::default()
+                .bg(self.selected_color)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            ratatui::style::Style::default()
+        };
+
+        for (cell_data, &width) in row_data.iter().zip(column_widths) {
+            if x_offset >= max_width {
+                break;
+            }
+
+            let effective_width = width.saturating_sub(NUM_SPACES_BETWEEN_COLUMNS);
+            let truncated = if cell_data.chars().count() > effective_width as usize {
+                let truncated_chars: String = cell_data
+                    .chars()
+                    .take(effective_width.saturating_sub(1) as usize)
+                    .collect();
+                format!("{}…", truncated_chars)
+            } else {
+                cell_data.clone()
+            };
+
+            // Pad with spaces to fill the column width
+            let padded = format!("{:width$}", truncated, width = width as usize);
+            let span = Span::styled(padded, style);
+
+            buf.set_span(x_offset, y, &span, width);
+            x_offset += width;
+        }
+    }
+
+    fn render_row_number_separator(
+        &self,
+        buf: &mut Buffer,
+        x_row_separator: u16,
+        y_start: u16,
+        height: u16,
+    ) {
+        let border_style = ratatui::style::Style::default().fg(self.border_color);
+
+        // Draw vertical line after row numbers
+        for y in y_start..(y_start + height) {
+            if let Some(cell) = buf.cell_mut(Position::new(x_row_separator - 1, y)) {
+                cell.set_symbol(line::VERTICAL).set_style(border_style);
+            }
+        }
     }
 }
 
 impl<'a> Widget for DataTable<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Calculate how many columns we can show (reserve space for row numbers)
-        let row_num_width = 6; // Width for row numbers
-        let available_width = area.width.saturating_sub(row_num_width + 1); // Account for borders and row numbers
+        if area.area() == 0 {
+            return;
+        }
+
+        // Calculate row number section width
+        let max_row_num = self.data.rows.len().saturating_sub(self.vertical_scroll);
+        let max_row_num_length = format!("{}", max_row_num).len().max(4) as u16;
+        let row_num_section_width = max_row_num_length + 2 * NUM_SPACES_AFTER_LINE_NUMBER + 1;
+        let x_row_separator = max_row_num_length + NUM_SPACES_AFTER_LINE_NUMBER + 1;
+
+        // Calculate available width for data columns
+        let available_width = area.width.saturating_sub(row_num_section_width);
+
         let min_column_width = 12;
         let max_visible_columns = (available_width / min_column_width).max(1) as usize;
 
@@ -156,98 +314,60 @@ impl<'a> Widget for DataTable<'a> {
         // Calculate column widths
         let column_widths = self.calculate_column_widths(&visible_headers, &visible_rows);
 
-        // Create constraints with row number column first
-        let mut col_constraints: Vec<Constraint> = vec![Constraint::Length(row_num_width)];
-        col_constraints.extend(
-            column_widths
-                .iter()
-                .map(|&width| Constraint::Length(width as u16)),
+        // Header area: 2 lines (header text + separator)
+        let header_height = 2;
+        let y_header = area.y;
+        let y_first_record = area.y + header_height;
+
+        // Row area: including row numbers and row content
+        let rows_area = Rect::new(
+            area.x,
+            y_first_record,
+            area.width,
+            area.height.saturating_sub(header_height),
         );
 
-        // Create table rows with row numbers
-        let table_rows: Vec<Row> = visible_rows
-            .into_iter()
-            .enumerate()
-            .map(|(row_idx, row_data)| {
-                // Calculate actual row number (accounting for vertical scroll)
-                let actual_row_num = row_idx + self.vertical_scroll + 1;
-                let is_selected = self
-                    .selected_row
-                    .is_some_and(|selected| actual_row_num - 1 == selected);
+        // Render row numbers
+        self.render_row_numbers(buf, rows_area, &visible_rows);
 
-                // Create cells with row number first
-                let row_num_cell = if is_selected {
-                    Cell::from(format!("{actual_row_num:>4}"))
-                        .fg(Color::White)
-                        .underlined()
-                } else {
-                    Cell::from(format!("{actual_row_num:>4}")).fg(Color::DarkGray)
-                };
+        // Render header
+        self.render_header(
+            buf,
+            row_num_section_width,
+            y_header,
+            &visible_headers,
+            &column_widths,
+            area.width,
+        );
 
-                let mut cells: Vec<Cell> = vec![row_num_cell];
+        // Render header separator (horizontal line below headers)
+        self.render_header_separator(buf, area, x_row_separator, y_first_record);
 
-                // Add data cells
-                cells.extend(row_data.into_iter().map(|cell_data| {
-                    // Truncate cell data if too long (Unicode-safe)
-                    let truncated = if cell_data.chars().count() > 23 {
-                        let truncated_chars: String = cell_data.chars().take(20).collect();
-                        format!("{truncated_chars}...")
-                    } else {
-                        cell_data
-                    };
-                    Cell::from(format!(" {truncated}")) // Add space for padding
-                }));
+        // Render data rows
+        let mut y_offset = y_first_record;
+        for (row_idx, row_data) in visible_rows.iter().enumerate() {
+            if y_offset >= rows_area.bottom() {
+                break;
+            }
+            let actual_row_num = row_idx + self.vertical_scroll;
+            let is_selected = self
+                .selected_row
+                .is_some_and(|selected| actual_row_num == selected);
 
-                let mut row = Row::new(cells);
-
-                // Highlight selected row with light gray background
-                if is_selected {
-                    row = row.style(
-                        ratatui::style::Style::default()
-                            .bg(self.selected_color)
-                            .fg(Color::White),
-                    );
-                }
-
-                row
-            })
-            .collect();
-
-        // Create header row with empty cell for row number column
-        let mut header_cells: Vec<Cell> = vec![Cell::from("    ").fg(Color::DarkGray)];
-
-        header_cells.extend(visible_headers.into_iter().map(|header| {
-            let truncated = if header.len() > 20 {
-                format!("{}...", &header[..17])
-            } else {
-                header
-            };
-            Cell::from(format!(" {truncated}")).bold().fg(Color::Yellow)
-        }));
-
-        let [header_area, content_area] =
-            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
-
-        // Create header as a single-row table
-        let header_widget = Table::new(vec![Row::new(header_cells)], col_constraints.clone())
-            .column_spacing(2)
-            .block(
-                Block::bordered()
-                    .borders(Borders::BOTTOM | Borders::TOP)
-                    .border_set(self.border_style)
-                    .title(
-                        Line::from(self.title.to_string())
-                            .centered()
-                            .bold()
-                            .fg(self.title_color),
-                    ),
+            self.render_data_row(
+                buf,
+                row_num_section_width,
+                y_offset,
+                row_data,
+                &column_widths,
+                is_selected,
+                area.width,
             );
+            y_offset += 1;
+        }
 
-        // Create data table without header
-        let table_widget = Table::new(table_rows, col_constraints).column_spacing(2);
-
-        header_widget.render(header_area, buf);
-        table_widget.render(content_area, buf);
+        // Render vertical separator after row numbers
+        self.render_row_number_separator(buf, x_row_separator, y_first_record, rows_area.height);
     }
 }
 
