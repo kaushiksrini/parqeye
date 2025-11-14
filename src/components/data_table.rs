@@ -199,6 +199,7 @@ impl<'a> DataTable<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_data_row(
         &self,
         buf: &mut Buffer,
