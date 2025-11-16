@@ -9,6 +9,18 @@
 
 ![Demo](.github/assets/demo.gif)
 
+**Features**
+
+- **Interactive Data Visualization** - Browse through your Parquet data in a table view with intuitive navigation
+  - Arrow keys for row/column navigation
+  - Page up/down shortcuts (`u`/`d`) for quick scrolling
+  - Smooth horizontal and vertical scrolling
+- **Schema Explorer** - Inspect column types, nested structures, and field definitions.
+- **File Metadata** - View Parquet file-level metadata including version, created by, encoding stats and more.
+- **Row Group Statistics** - Examine row group-level metadata, statistics, and data distribution across groups.
+- **Tab-based Interface** - Quickly switch between Visualize, Schema, Metadata, and Row Groups views.
+- **Terminal-native** - Works directly in your terminal with keyboard-driven navigation.
+
 # Usage
 
 Run `parqeye` by providing the path to the `.parquet` file.
@@ -46,3 +58,10 @@ This package is released under the [MIT License](./LICENSE).
 # Acknowledgements
 
 - [csvlens](https://github.com/YS-L/csvlens) for the inspiration
+
+
+# TODOs
+
+- [ ] Lazy/streaming loading of parquet files.
+- [ ] Filter columns by value in the visualize tab.
+- [ ] Read parquet files on the cloud (`s3://...`).
