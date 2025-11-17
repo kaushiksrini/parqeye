@@ -4,6 +4,7 @@ description = "Parquet viewer for the command line"
 version = "0.0.2"
 readme = "README.md"
 license = "MIT"
+repository = "https://github.com/kaushiksrini/parqeye"
 keywords = ["parquet", "parq", "visualizer", "schema", "tui"]
 edition = "2024"
 
@@ -22,3 +23,7 @@ polars = { version = "0.51.0", features = ["lazy", "parquet", "dtype-full", "tim
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[package.metadata.dist]
+ci = "github"
+
