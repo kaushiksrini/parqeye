@@ -11,15 +11,12 @@
 
 **Features**
 
-- **Interactive Data Visualization** - Browse through your Parquet data in a table view with intuitive navigation
-  - Arrow keys for row/column navigation
-  - Page up/down shortcuts (`u`/`d`) for quick scrolling
-  - Smooth horizontal and vertical scrolling
+- **Interactive Data Visualization** - Browse through your Parquet data in a table view with keyboard navigation.
 - **Schema Explorer** - Inspect column types, nested structures, and field definitions.
 - **File Metadata** - View Parquet file-level metadata including version, created by, encoding stats and more.
 - **Row Group Statistics** - Examine row group-level metadata, statistics, and data distribution across groups.
 - **Tab-based Interface** - Quickly switch between Visualize, Schema, Metadata, and Row Groups views.
-- **Terminal-native** - Works directly in your terminal with keyboard-driven navigation.
+- **Terminal-native** - Works directly in your terminal.
 
 # Usage
 
