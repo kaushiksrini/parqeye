@@ -22,3 +22,7 @@ polars = { version = "0.51.0", features = ["lazy", "parquet", "dtype-full", "tim
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[package.metadata.dist]
+ci = "github"
+
