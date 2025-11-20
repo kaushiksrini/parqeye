@@ -40,12 +40,20 @@ You can build from source by downloading the repository and running the followin
 cargo build --release
 ```
 
-## Build from Cargo
+## Cargo
 
 If you use Rust, build directly from [crates.io](https://crates.io/crates/parqeye)
 
 ```
 cargo install parqeye
+```
+
+## Homebrew
+
+If you have Homebrew on macOS, you can install using:
+
+```sh
+brew install kaushiksrini/parqeye/parqeye
 ```
 
 # License
