@@ -18,6 +18,8 @@ crossterm = "0.29.0"
 chrono = "0.4"                                          # for timestamp handling
 itertools = "0.14.0"
 polars = { version = "0.51.0", features = ["lazy", "parquet", "dtype-full", "timezones"] } 
+config = "0.15.19"
+serde = "1.0.228"
 
 # The profile that 'dist' will build with
 [profile.dist]

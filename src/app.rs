@@ -2,6 +2,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
 use std::io;
 
+use crate::config;
 use crate::file::parquet_ctx::ParquetCtx;
 use crate::tabs::TabManager;
 
@@ -51,22 +52,24 @@ pub struct AppState {
     tree_scroll_offset: usize,
     data_vertical_scroll: usize,
     visible_data_rows: usize,
+    pub config: config::AppConfig,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::new()
+        Self::new(config::AppConfig::default())
     }
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(config: config::AppConfig) -> Self {
         Self {
             horizontal_offset: 0,
             vertical_offset: 0,
             tree_scroll_offset: 0,
             data_vertical_scroll: 0,
             visible_data_rows: 20, // Default fallback
+            config: config,
         }
     }
 
@@ -161,7 +164,7 @@ impl AppState {
 }
 
 impl<'a> App<'a> {
-    pub fn new(file_info: &'a ParquetCtx) -> Self {
+    pub fn new(file_info: &'a ParquetCtx, config: config::AppConfig) -> Self {
         let sample_data_rows = file_info.sample_data.total_rows;
 
         let tab_manager = TabManager::new(
@@ -175,7 +178,7 @@ impl<'a> App<'a> {
             file_name: file_info.file_path.clone(),
             exit: false,
             tabs: tab_manager,
-            state: AppState::new(),
+            state: AppState::new(config),
         }
     }
 
