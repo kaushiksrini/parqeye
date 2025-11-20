@@ -50,7 +50,7 @@ cargo install parqeye
 
 ## Homebrew
 
-If you have Homebrew on macOS, you can install using:
+If you have Homebrew, you can install using:
 
 ```sh
 brew install kaushiksrini/parqeye/parqeye
