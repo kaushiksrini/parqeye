@@ -40,8 +40,12 @@ impl Keymap {
         self.bindings.get(&code).copied()
     }
 
-    pub fn get_keycode(&self, action: Action) -> Option<KeyCode> {
-        self.reverse.get(&action).copied()
+    pub fn get_keycode_string(&self, action: Action) -> String {
+        match self.reverse.get(&action) {
+            Some(KeyCode::Char(c)) => format!("[{}]", c),
+            Some(other) => format!("[{:?}]", other),
+            None => "[???]".to_string(),
+        }
     }
 }
 

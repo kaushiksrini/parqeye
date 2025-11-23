@@ -3,7 +3,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Span;
 use std::io;
 
-use crate::{app::AppState, config::Action, tabs::Tab};
+use crate::{app::AppState, config, config::Action, tabs::Tab};
 
 pub struct VisualizeTab {
     pub max_horizontal_scroll: Option<usize>,
@@ -86,23 +86,38 @@ impl Tab for VisualizeTab {
         Ok(())
     }
 
-    fn instructions(&self) -> Vec<Span<'static>> {
+    fn instructions(&self, config: &config::AppConfig) -> Vec<Span<'static>> {
         vec![
-            "↑".green(),
-            "/".white(),
-            "↓".blue(),
+            config.keymap.get_keycode_string(config::Action::Up).green(),
+            " Up/Down ".white(),
+            config
+                .keymap
+                .get_keycode_string(config::Action::Down)
+                .blue(),
             " : ".into(),
             "Row".into(),
             " | ".white(),
-            "→".green(),
-            "/".white(),
-            "←".blue(),
+            config
+                .keymap
+                .get_keycode_string(config::Action::Left)
+                .green(),
+            " Left/Right ".white(),
+            config
+                .keymap
+                .get_keycode_string(config::Action::Right)
+                .blue(),
             " : ".into(),
             "Column".into(),
             " | ".white(),
-            "u".green(),
-            "/".white(),
-            "d".blue(),
+            config
+                .keymap
+                .get_keycode_string(config::Action::PageUp)
+                .green(),
+            " Up/Down ".white(),
+            config
+                .keymap
+                .get_keycode_string(config::Action::PageDown)
+                .blue(),
             " : ".into(),
             "Page".into(),
         ]

@@ -1,7 +1,7 @@
 use crossterm::event::KeyEvent;
 use std::io;
 
-use crate::{app::AppState, tabs::Tab};
+use crate::{app::AppState, config, tabs::Tab};
 use ratatui::text::Span;
 
 pub struct MetadataTab {
@@ -40,7 +40,7 @@ impl Tab for MetadataTab {
         Ok(())
     }
 
-    fn instructions(&self) -> Vec<Span<'static>> {
+    fn instructions(&self, _config: &config::AppConfig) -> Vec<Span<'static>> {
         vec![]
     }
 

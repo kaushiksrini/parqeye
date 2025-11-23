@@ -6,6 +6,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Tabs;
 use ratatui::widgets::Widget;
 
+use crate::config;
 use crate::tabs::Tab;
 use crate::tabs::metadata::MetadataTab;
 use crate::tabs::row_groups::RowGroupsTab;
@@ -16,10 +17,16 @@ pub struct TabManager {
     pub tabs: Vec<Box<dyn Tab>>,
     pub active_tab: usize,
     pub title: String,
+    pub config: config::AppConfig,
 }
 
 impl TabManager {
-    pub fn new(num_columns: usize, num_row_groups: usize, sample_data_rows: usize) -> Self {
+    pub fn new(
+        num_columns: usize,
+        num_row_groups: usize,
+        sample_data_rows: usize,
+        config: config::AppConfig,
+    ) -> Self {
         Self {
             tabs: vec![
                 Box::new(
@@ -41,6 +48,7 @@ impl TabManager {
             ],
             active_tab: 0,
             title: "Tabs".to_string(),
+            config,
         }
     }
 
@@ -62,16 +70,23 @@ impl TabManager {
     }
 
     pub fn render_instructions(&self, area: Rect, buf: &mut Buffer) {
-        let mut span = self.active_tab().instructions();
+        let mut span = self.active_tab().instructions(&self.config);
         if !span.is_empty() {
             span.push(" - ".into());
         }
+        // Get key for next tab from config
         span.extend(vec![
-            "[Tab]".green(),
+            self.config
+                .keymap
+                .get_keycode_string(config::Action::NextTab)
+                .green(),
             " Next Tab".into(),
             ", ".into(),
-            "[Q]".blue(),
-            "uit".into(),
+            self.config
+                .keymap
+                .get_keycode_string(config::Action::Quit)
+                .blue(),
+            " Quit".into(),
         ]);
         let line = Line::from(span);
 

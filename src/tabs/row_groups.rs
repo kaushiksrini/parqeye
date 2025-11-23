@@ -1,5 +1,5 @@
 use crate::config::Action;
-use crate::{app::AppState, tabs::Tab};
+use crate::{app::AppState, config, tabs::Tab};
 use crossterm::event::KeyEvent;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
@@ -67,17 +67,26 @@ impl Tab for RowGroupsTab {
         Ok(())
     }
 
-    fn instructions(&self) -> Vec<Span<'static>> {
+    fn instructions(&self, config: &config::AppConfig) -> Vec<Span<'static>> {
         vec![
-            "→".green(),
-            "/".white(),
-            "←".blue(),
+            config
+                .keymap
+                .get_keycode_string(config::Action::Right)
+                .green(),
+            " Left/Right ".white(),
+            config
+                .keymap
+                .get_keycode_string(config::Action::Left)
+                .blue(),
             " : ".into(),
             "Iterate Row Groups".into(),
             ", ".into(),
-            "↑".green(),
-            "/".white(),
-            "↓".blue(),
+            config.keymap.get_keycode_string(config::Action::Up).green(),
+            " Up/Down ".white(),
+            config
+                .keymap
+                .get_keycode_string(config::Action::Down)
+                .blue(),
             " : ".into(),
             "Schema".into(),
         ]

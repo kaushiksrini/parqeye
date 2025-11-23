@@ -171,6 +171,7 @@ impl<'a> App<'a> {
             file_info.schema.column_size(),
             file_info.row_groups.num_row_groups(),
             sample_data_rows,
+            config.clone(),
         );
 
         Self {
