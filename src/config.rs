@@ -1,10 +1,11 @@
 use config as config_external_crate;
 use config_external_crate::{Config, File, FileFormat};
 use crossterm::event::KeyCode;
+use directories::ProjectDirs;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 pub enum Action {
     Up,
     Down,
@@ -13,6 +14,9 @@ pub enum Action {
     PageUp,
     PageDown,
     Quit,
+    Reset,
+    NextTab,
+    PrevTab,
 }
 
 #[derive(Clone, Debug)]
@@ -28,26 +32,39 @@ struct RawConfig {
 #[derive(Debug, Clone)]
 pub struct Keymap {
     bindings: HashMap<KeyCode, Action>,
+    reverse: HashMap<Action, KeyCode>,
 }
 
 impl Keymap {
     pub fn get_action(&self, code: KeyCode) -> Option<Action> {
         self.bindings.get(&code).copied()
     }
+
+    pub fn get_keycode(&self, action: Action) -> Option<KeyCode> {
+        self.reverse.get(&action).copied()
+    }
 }
 
 fn default_keybindings() -> Keymap {
-    let mut map = HashMap::new();
+    let mut bindings = HashMap::new();
 
-    map.insert(KeyCode::Up, Action::Up);
-    map.insert(KeyCode::Down, Action::Down);
-    map.insert(KeyCode::Left, Action::Left);
-    map.insert(KeyCode::Right, Action::Right);
-    map.insert(KeyCode::PageUp, Action::PageUp);
-    map.insert(KeyCode::PageDown, Action::PageDown);
-    map.insert(KeyCode::Esc, Action::Quit);
+    bindings.insert(KeyCode::Char('k'), Action::Up);
+    bindings.insert(KeyCode::Char('j'), Action::Down);
+    bindings.insert(KeyCode::Char('h'), Action::Left);
+    bindings.insert(KeyCode::Char('l'), Action::Right);
+    bindings.insert(KeyCode::Char('u'), Action::PageUp);
+    bindings.insert(KeyCode::Char('d'), Action::PageDown);
+    bindings.insert(KeyCode::Char('q'), Action::Quit);
+    bindings.insert(KeyCode::Esc, Action::Reset);
+    bindings.insert(KeyCode::Tab, Action::NextTab);
+    bindings.insert(KeyCode::BackTab, Action::PrevTab);
 
-    Keymap { bindings: map }
+    let reverse = bindings
+        .iter()
+        .map(|(k, v)| (*v, *k))
+        .collect::<HashMap<_, _>>();
+
+    Keymap { bindings, reverse }
 }
 
 fn parse_keycode(s: &str) -> Result<KeyCode, String> {
@@ -84,33 +101,45 @@ fn parse_keycode(s: &str) -> Result<KeyCode, String> {
 }
 
 fn build_keymap(raw: RawConfig) -> Keymap {
-    let mut map = default_keybindings().bindings;
+    let mut bindings = default_keybindings().bindings;
 
     for (key_str, action) in raw.keybindings {
         match parse_keycode(&key_str) {
             Ok(code) => {
                 // Remove any existing key that maps to the same action
-                map.retain(|_, &mut a| a != action);
+                bindings.retain(|_, &mut a| a != action);
 
                 // Insert the new key
-                map.insert(code, action);
+                bindings.insert(code, action);
             }
             Err(err) => eprintln!("[config] bad key '{}': {} — ignored", key_str, err),
         }
     }
 
-    Keymap { bindings: map }
+    let reverse = bindings
+        .iter()
+        .map(|(k, v)| (*v, *k))
+        .collect::<HashMap<_, _>>();
+
+    Keymap { bindings, reverse }
 }
 
 pub fn load_config() -> AppConfig {
-    let path = format!(
-        "{}/.config/parqeye/config.toml",
-        std::env::var("HOME").unwrap()
-    );
+    let proj_dirs = ProjectDirs::from("", "", "parqeye").unwrap();
+    let config_dir = proj_dirs.config_dir();
+    let path = config_dir.join("config.toml");
+    let path_str = path.to_string_lossy();
 
-    // Try loading config file
+    // Return defaults if config file does not exist
+    if !path.exists() {
+        return AppConfig {
+            keymap: default_keybindings(),
+        };
+    }
+
+    // Load and parse the config file
     let raw = match Config::builder()
-        .add_source(File::new(&path, FileFormat::Toml).required(false))
+        .add_source(File::new(path_str.as_ref(), FileFormat::Toml).required(false))
         .build()
     {
         Ok(cfg) => match cfg.try_deserialize::<RawConfig>() {

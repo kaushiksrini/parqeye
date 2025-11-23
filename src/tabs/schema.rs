@@ -1,9 +1,9 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 use std::io;
 
-use crate::{app::AppState, tabs::Tab};
+use crate::{app::AppState, config::Action, tabs::Tab};
 
 pub struct SchemaTab {
     pub max_horizontal_scroll: Option<usize>,
@@ -37,20 +37,32 @@ impl SchemaTab {
 
 impl Tab for SchemaTab {
     fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error> {
-        match key_event.code {
-            KeyCode::Up if state.vertical_offset() > 0 => state.up(),
-            KeyCode::Down
-                if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) =>
-            {
-                state.down()
+        if let Some(action) = state.config.keymap.get_action(key_event.code) {
+            match action {
+                Action::Up => {
+                    if state.vertical_offset() > 0 {
+                        state.up();
+                    }
+                }
+                Action::Down => {
+                    if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) {
+                        state.down();
+                    }
+                }
+                Action::Left => {
+                    if state.horizontal_offset() > 0 {
+                        state.left();
+                    }
+                }
+                Action::Right => {
+                    if state.horizontal_offset() < self.max_horizontal_scroll.unwrap_or(usize::MAX)
+                    {
+                        state.right();
+                    }
+                }
+                _ => {}
             }
-            KeyCode::Left if state.horizontal_offset() > 0 => state.left(),
-            KeyCode::Right
-                if state.horizontal_offset() < self.max_horizontal_scroll.unwrap_or(usize::MAX) =>
-            {
-                state.right()
-            }
-            _ => {}
+            return Ok(());
         }
         Ok(())
     }

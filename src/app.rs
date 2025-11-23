@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
 use std::io;
 
@@ -208,22 +208,24 @@ impl<'a> App<'a> {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
-            KeyCode::Esc => self.state.reset(),
-            KeyCode::Tab => {
-                self.tabs.next();
-                self.state.reset();
-            }
-            KeyCode::BackTab => {
-                self.tabs.prev();
-                self.state.reset();
-            }
-            _ => {
-                self.tabs
-                    .active_tab()
-                    .on_event(key_event, &mut self.state)
-                    .unwrap();
+        if let Some(action) = self.state.config.keymap.get_action(key_event.code) {
+            match action {
+                config::Action::Quit => self.exit(),
+                config::Action::Reset => self.state.reset(),
+                config::Action::NextTab => {
+                    self.tabs.next();
+                    self.state.reset();
+                }
+                config::Action::PrevTab => {
+                    self.tabs.prev();
+                    self.state.reset();
+                }
+                _ => {
+                    self.tabs
+                        .active_tab()
+                        .on_event(key_event, &mut self.state)
+                        .unwrap();
+                }
             }
         }
     }
