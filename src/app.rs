@@ -69,7 +69,7 @@ impl AppState {
             tree_scroll_offset: 0,
             data_vertical_scroll: 0,
             visible_data_rows: 20, // Default fallback
-            config: config,
+            config,
         }
     }
 
