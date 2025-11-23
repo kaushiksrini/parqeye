@@ -1,9 +1,9 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 use std::io;
 
-use crate::{app::AppState, tabs::Tab};
+use crate::{app::AppState, config::Action, tabs::Tab};
 
 pub struct VisualizeTab {
     pub max_horizontal_scroll: Option<usize>,
@@ -47,37 +47,42 @@ impl Tab for VisualizeTab {
         let max_rows = self.max_rows.unwrap_or(0);
         let visible_rows = state.visible_data_rows();
 
-        match key_event.code {
-            // Row navigation (Up/Down arrows)
-            KeyCode::Up => {
-                if state.vertical_offset() > 0 {
-                    state.up();
-                    state.adjust_scroll_to_selection(visible_rows, max_rows);
+        if let Some(action) = state.config.keymap.get_action(key_event.code) {
+            match action {
+                Action::Up => {
+                    if state.vertical_offset() > 0 {
+                        state.up();
+                        state.adjust_scroll_to_selection(visible_rows, max_rows);
+                    }
                 }
-            }
-            KeyCode::Down => {
-                if state.vertical_offset() < max_rows.saturating_sub(1) {
-                    state.down();
-                    state.adjust_scroll_to_selection(visible_rows, max_rows);
+                Action::Down => {
+                    if state.vertical_offset() < max_rows.saturating_sub(1) {
+                        state.down();
+                        state.adjust_scroll_to_selection(visible_rows, max_rows);
+                    }
                 }
+                Action::Left => {
+                    if state.horizontal_offset() > 0 {
+                        state.left();
+                    }
+                }
+                Action::Right => {
+                    if state.horizontal_offset()
+                        < self.max_horizontal_scroll.unwrap_or(usize::MAX) - 1
+                    {
+                        state.right();
+                    }
+                }
+                Action::PageUp => {
+                    state.page_up(visible_rows, max_rows);
+                }
+                Action::PageDown => {
+                    state.page_down(visible_rows, max_rows);
+                }
+                _ => {}
             }
-            // Page navigation (u/d keys)
-            KeyCode::Char('u') | KeyCode::Char('U') => {
-                state.page_up(visible_rows, max_rows);
-            }
-            KeyCode::Char('d') | KeyCode::Char('D') => {
-                state.page_down(visible_rows, max_rows);
-            }
-            // Column navigation (Left/Right arrows)
-            KeyCode::Left if state.horizontal_offset() > 0 => state.left(),
-            KeyCode::Right
-                if state.horizontal_offset()
-                    < self.max_horizontal_scroll.unwrap_or(usize::MAX) - 1 =>
-            {
-                state.right()
-            }
-            _ => {}
         }
+
         Ok(())
     }
 
