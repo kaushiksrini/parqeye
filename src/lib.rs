@@ -1,6 +1,7 @@
 pub mod app;
 pub mod components;
 pub mod file;
+pub mod search;
 pub mod tabs;
 pub mod ui;
 

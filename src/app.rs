@@ -45,12 +45,77 @@ pub struct App<'a> {
     pub state: AppState,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct SearchState {
+    pub active: bool,
+    pub query: String,
+    pub cursor_pos: usize,
+    pub confirmed: bool,
+}
+
+impl SearchState {
+    pub fn activate(&mut self) {
+        self.active = true;
+        self.confirmed = false;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.active = false;
+        self.confirmed = false;
+        self.query.clear();
+        self.cursor_pos = 0;
+    }
+
+    pub fn confirm(&mut self) {
+        self.active = false;
+        self.confirmed = true;
+    }
+
+    pub fn push_char(&mut self, c: char) {
+        self.query.insert(self.cursor_pos, c);
+        self.cursor_pos += c.len_utf8();
+    }
+
+    pub fn backspace(&mut self) {
+        if self.cursor_pos > 0 {
+            let prev_char_boundary = self.query[..self.cursor_pos]
+                .char_indices()
+                .next_back()
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+            self.query.remove(prev_char_boundary);
+            self.cursor_pos = prev_char_boundary;
+        }
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if self.cursor_pos > 0 {
+            self.cursor_pos = self.query[..self.cursor_pos]
+                .char_indices()
+                .next_back()
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        if self.cursor_pos < self.query.len() {
+            self.cursor_pos = self.query[self.cursor_pos..]
+                .char_indices()
+                .nth(1)
+                .map(|(idx, _)| self.cursor_pos + idx)
+                .unwrap_or(self.query.len());
+        }
+    }
+}
+
 pub struct AppState {
     horizontal_offset: usize,
     vertical_offset: usize,
     tree_scroll_offset: usize,
     data_vertical_scroll: usize,
     visible_data_rows: usize,
+    pub search: SearchState,
 }
 
 impl Default for AppState {
@@ -67,6 +132,7 @@ impl AppState {
             tree_scroll_offset: 0,
             data_vertical_scroll: 0,
             visible_data_rows: 20, // Default fallback
+            search: SearchState::default(),
         }
     }
 
@@ -75,6 +141,7 @@ impl AppState {
         self.vertical_offset = 0;
         self.tree_scroll_offset = 0;
         self.data_vertical_scroll = 0;
+        self.search.deactivate();
     }
 
     pub fn horizontal_offset(&self) -> usize {
@@ -205,6 +272,27 @@ impl<'a> App<'a> {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // Handle search mode input first
+        if self.state.search.active {
+            match key_event.code {
+                KeyCode::Esc => self.state.search.deactivate(),
+                KeyCode::Enter => self.state.search.confirm(),
+                KeyCode::Backspace => self.state.search.backspace(),
+                KeyCode::Left => self.state.search.move_cursor_left(),
+                KeyCode::Right => self.state.search.move_cursor_right(),
+                KeyCode::Char(c) => self.state.search.push_char(c),
+                KeyCode::Up | KeyCode::Down => {
+                    // Allow navigation while searching
+                    self.tabs
+                        .active_tab()
+                        .on_event(key_event, &mut self.state)
+                        .unwrap();
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match key_event.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
             KeyCode::Esc => self.state.reset(),

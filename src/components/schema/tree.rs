@@ -1,10 +1,11 @@
 use crate::file::schema::SchemaInfo;
+use crate::search::filter_schema_indices;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Stylize},
     symbols::border,
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, List, ListItem, Widget},
 };
 
@@ -20,6 +21,9 @@ pub struct SchemaTreeComponent<'a> {
     pub selected_color: Color,
     pub border_style: border::Set,
     pub show_legend: bool,
+    pub search_query: Option<&'a str>,
+    pub search_active: bool,
+    pub cursor_pos: usize,
 }
 
 impl<'a> SchemaTreeComponent<'a> {
@@ -36,6 +40,9 @@ impl<'a> SchemaTreeComponent<'a> {
             selected_color: Color::Yellow,
             border_style: border::ROUNDED,
             show_legend: true,
+            search_query: None,
+            search_active: false,
+            cursor_pos: 0,
         }
     }
 
@@ -77,10 +84,23 @@ impl<'a> SchemaTreeComponent<'a> {
         self.show_legend = show;
         self
     }
+
+    pub fn with_search(mut self, query: &'a str, active: bool, cursor_pos: usize) -> Self {
+        self.search_query = Some(query);
+        self.search_active = active;
+        self.cursor_pos = cursor_pos;
+        self
+    }
 }
 
 impl<'a> Widget for SchemaTreeComponent<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        // Filter schema items if search query is present
+        let filtered_indices: Vec<usize> = match self.search_query {
+            Some(query) if !query.is_empty() => filter_schema_indices(self.schema_columns, query),
+            _ => (0..self.schema_columns.len()).collect(),
+        };
+
         // Create a mapping from primitive column index to schema tree index
         let primitive_to_schema_map: Vec<usize> = self
             .schema_columns
@@ -92,15 +112,14 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
         // Calculate visible range based on scroll offset and available height
         let visible_height = area.height.saturating_sub(1) as usize; // Account for borders + legend
         let start_idx = self.scroll_offset;
-        let end_idx = (start_idx + visible_height).min(self.schema_columns.len());
+        let end_idx = (start_idx + visible_height).min(filtered_indices.len());
 
-        let items: Vec<ListItem> = self
-            .schema_columns
+        let items: Vec<ListItem> = filtered_indices
             .iter()
-            .enumerate()
             .skip(start_idx)
             .take(end_idx - start_idx)
-            .map(|(idx, line)| {
+            .map(|&idx| {
+                let line = &self.schema_columns[idx];
                 let is_selected = if self.selected_index > 0 {
                     // Convert primitive index (1-based) to schema tree index
                     primitive_to_schema_map
@@ -112,7 +131,31 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
 
                 match line {
                     SchemaInfo::Root { display: d, .. } => {
-                        ListItem::new(d.clone()).fg(self.root_color)
+                        // If search is active, render search input instead of root display
+                        if self.search_active {
+                            let query = self.search_query.unwrap_or("");
+                            let before_cursor = &query[..self.cursor_pos];
+                            let after_cursor = &query[self.cursor_pos..];
+                            ListItem::new(Line::from(vec![
+                                Span::styled("/ ", Color::LightYellow),
+                                Span::styled(before_cursor.to_string(), Color::Cyan),
+                                Span::styled("|", Color::White),
+                                Span::styled(after_cursor.to_string(), Color::Cyan),
+                            ]))
+                        } else if let Some(query) = self.search_query {
+                            if !query.is_empty() {
+                                // Show filter indicator when query is non-empty but not active
+                                ListItem::new(Line::from(vec![
+                                    Span::styled("/ [", Color::LightYellow),
+                                    Span::styled(query.to_string(), Color::Cyan),
+                                    Span::styled("]", Color::LightYellow),
+                                ]))
+                            } else {
+                                ListItem::new(d.clone()).fg(self.root_color)
+                            }
+                        } else {
+                            ListItem::new(d.clone()).fg(self.root_color)
+                        }
                     }
                     SchemaInfo::Primitive { display: d, .. } => {
                         let mut item = ListItem::new(d.clone()).fg(self.primitive_color);
@@ -127,8 +170,6 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
                 }
             })
             .collect();
-
-        // highlight the color
 
         let mut block = Block::bordered()
             .title(Line::from(self.title.fg(self.title_color).bold()).centered())

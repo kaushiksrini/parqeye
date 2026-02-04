@@ -38,6 +38,9 @@ impl SchemaTab {
 impl Tab for SchemaTab {
     fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error> {
         match key_event.code {
+            KeyCode::Char('/') => {
+                state.search.activate();
+            }
             KeyCode::Up if state.vertical_offset() > 0 => state.up(),
             KeyCode::Down
                 if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) =>
@@ -57,6 +60,7 @@ impl Tab for SchemaTab {
 
     fn instructions(&self) -> Vec<Span<'static>> {
         vec![
+            "/ : Search, ".into(),
             "←".green(),
             "/".white(),
             "→".blue(),

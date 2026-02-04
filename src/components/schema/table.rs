@@ -21,6 +21,7 @@ pub struct FileSchemaTable<'a> {
     pub border_style: border::Set,
     pub horizontal_scroll: usize,
     pub vertical_scroll: usize,
+    pub filtered_indices: Option<Vec<usize>>,
 }
 
 impl<'a> FileSchemaTable<'a> {
@@ -34,6 +35,7 @@ impl<'a> FileSchemaTable<'a> {
             border_style: border::ROUNDED,
             horizontal_scroll: 0,
             vertical_scroll: 0,
+            filtered_indices: None,
         }
     }
 
@@ -65,6 +67,11 @@ impl<'a> FileSchemaTable<'a> {
 
     pub fn with_vertical_scroll(mut self, offset: usize) -> Self {
         self.vertical_scroll = offset;
+        self
+    }
+
+    pub fn with_filtered_indices(mut self, indices: Vec<usize>) -> Self {
+        self.filtered_indices = Some(indices);
         self
     }
 
@@ -120,13 +127,24 @@ impl<'a> Widget for FileSchemaTable<'a> {
         let visible_rows_count = area.height.saturating_sub(1) as usize;
 
         // Generate table data with only visible columns and rows
-        let (visible_rows, column_widths) = self.schema.generate_table_rows_with_scroll(
-            self.selected_index,
-            horizontal_scroll,
-            max_visible_columns as usize,
-            self.vertical_scroll,
-            visible_rows_count,
-        );
+        let (visible_rows, column_widths) = if let Some(ref indices) = self.filtered_indices {
+            self.schema.generate_table_rows_filtered(
+                self.selected_index,
+                horizontal_scroll,
+                max_visible_columns as usize,
+                self.vertical_scroll,
+                visible_rows_count,
+                indices,
+            )
+        } else {
+            self.schema.generate_table_rows_with_scroll(
+                self.selected_index,
+                horizontal_scroll,
+                max_visible_columns as usize,
+                self.vertical_scroll,
+                visible_rows_count,
+            )
+        };
 
         // Get visible columns
         let visible_headers: Vec<_> = all_headers
