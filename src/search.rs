@@ -203,4 +203,200 @@ mod tests {
         let indices = filter_schema_indices(&schema, "zzz");
         assert_eq!(indices, vec![0]); // only root
     }
+
+    // Tests for filter_schema_with_positions
+
+    #[test]
+    fn test_with_positions_empty_query() {
+        let schema = create_test_schema();
+        let result = filter_schema_with_positions(&schema, "");
+        assert_eq!(result.indices, vec![0, 1, 2, 3]);
+        assert!(result.match_positions.is_empty());
+    }
+
+    #[test]
+    fn test_with_positions_exact_match() {
+        let schema = create_test_schema();
+        let result = filter_schema_with_positions(&schema, "email");
+
+        // Check indices
+        assert!(result.indices.contains(&0)); // root
+        assert!(result.indices.contains(&3)); // email
+
+        // Check match positions for "email" - should match all characters
+        let positions = result.match_positions.get(&3).unwrap();
+        assert_eq!(positions, &vec![0, 1, 2, 3, 4]); // e-m-a-i-l
+    }
+
+    #[test]
+    fn test_with_positions_partial_match() {
+        let schema = create_test_schema();
+        let result = filter_schema_with_positions(&schema, "user");
+
+        // Both user_id and username should match
+        assert!(result.match_positions.contains_key(&1)); // user_id
+        assert!(result.match_positions.contains_key(&2)); // username
+
+        // Check positions for user_id - "user" matches first 4 chars
+        let positions = result.match_positions.get(&1).unwrap();
+        assert_eq!(positions, &vec![0, 1, 2, 3]);
+
+        // Check positions for username - "user" matches first 4 chars
+        let positions = result.match_positions.get(&2).unwrap();
+        assert_eq!(positions, &vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_with_positions_fuzzy_match() {
+        let schema = create_test_schema();
+        // "uid" should fuzzy match "user_id" at positions u(0), i(5), d(6)
+        let result = filter_schema_with_positions(&schema, "uid");
+
+        assert!(result.match_positions.contains_key(&1)); // user_id
+        let positions = result.match_positions.get(&1).unwrap();
+        // Fuzzy matcher finds u, i, d in "user_id"
+        assert!(positions.contains(&0)); // 'u'
+        assert!(positions.contains(&5)); // 'i'
+        assert!(positions.contains(&6)); // 'd'
+    }
+
+    #[test]
+    fn test_with_positions_no_match() {
+        let schema = create_test_schema();
+        let result = filter_schema_with_positions(&schema, "zzz");
+
+        assert_eq!(result.indices, vec![0]); // only root
+        assert!(result.match_positions.is_empty());
+    }
+
+    // Tests for get_filtered_primitive_indices
+
+    #[test]
+    fn test_primitive_indices_empty_query() {
+        let schema = create_test_schema();
+        let indices = get_filtered_primitive_indices(&schema, "");
+
+        // Should return all primitive indices (1-based)
+        assert_eq!(indices, vec![1, 2, 3]); // user_id=1, username=2, email=3
+    }
+
+    #[test]
+    fn test_primitive_indices_single_match() {
+        let schema = create_test_schema();
+        let indices = get_filtered_primitive_indices(&schema, "email");
+
+        // Only email matches, which is the 3rd primitive (1-based)
+        assert_eq!(indices, vec![3]);
+    }
+
+    #[test]
+    fn test_primitive_indices_multiple_matches() {
+        let schema = create_test_schema();
+        let indices = get_filtered_primitive_indices(&schema, "user");
+
+        // user_id (1) and username (2) should match
+        assert_eq!(indices, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_primitive_indices_no_match() {
+        let schema = create_test_schema();
+        let indices = get_filtered_primitive_indices(&schema, "zzz");
+
+        assert!(indices.is_empty());
+    }
+
+    #[test]
+    fn test_primitive_indices_with_groups() {
+        // Create schema with a group
+        let schema = vec![
+            SchemaInfo::Root {
+                name: "root".to_string(),
+                display: "└─ root".to_string(),
+            },
+            SchemaInfo::Group {
+                name: "address".to_string(),
+                display: "   ├─ address".to_string(),
+                repetition: "OPTIONAL".to_string(),
+            },
+            SchemaInfo::Primitive {
+                name: "street".to_string(),
+                display: "   │  ├─ street".to_string(),
+                info: Box::new(crate::file::schema::ColumnSchemaInfo {
+                    name: "street".to_string(),
+                    repetition: "OPTIONAL".to_string(),
+                    physical: "BYTE_ARRAY".to_string(),
+                    logical: "".to_string(),
+                    codec: "SNAPPY".to_string(),
+                    converted_type: "".to_string(),
+                    encoding: "PLAIN".to_string(),
+                    dictionary_values: None,
+                }),
+                stats: crate::file::schema::ColumnStats {
+                    min: None,
+                    max: None,
+                    nulls: 0,
+                    distinct: None,
+                    total_compressed_size: 0,
+                    total_uncompressed_size: 0,
+                },
+            },
+            SchemaInfo::Primitive {
+                name: "city".to_string(),
+                display: "   │  └─ city".to_string(),
+                info: Box::new(crate::file::schema::ColumnSchemaInfo {
+                    name: "city".to_string(),
+                    repetition: "OPTIONAL".to_string(),
+                    physical: "BYTE_ARRAY".to_string(),
+                    logical: "".to_string(),
+                    codec: "SNAPPY".to_string(),
+                    converted_type: "".to_string(),
+                    encoding: "PLAIN".to_string(),
+                    dictionary_values: None,
+                }),
+                stats: crate::file::schema::ColumnStats {
+                    min: None,
+                    max: None,
+                    nulls: 0,
+                    distinct: None,
+                    total_compressed_size: 0,
+                    total_uncompressed_size: 0,
+                },
+            },
+            SchemaInfo::Primitive {
+                name: "email".to_string(),
+                display: "   └─ email".to_string(),
+                info: Box::new(crate::file::schema::ColumnSchemaInfo {
+                    name: "email".to_string(),
+                    repetition: "OPTIONAL".to_string(),
+                    physical: "BYTE_ARRAY".to_string(),
+                    logical: "".to_string(),
+                    codec: "SNAPPY".to_string(),
+                    converted_type: "".to_string(),
+                    encoding: "PLAIN".to_string(),
+                    dictionary_values: None,
+                }),
+                stats: crate::file::schema::ColumnStats {
+                    min: None,
+                    max: None,
+                    nulls: 0,
+                    distinct: None,
+                    total_compressed_size: 0,
+                    total_uncompressed_size: 0,
+                },
+            },
+        ];
+
+        // Empty query should return all primitives (groups don't count)
+        let indices = get_filtered_primitive_indices(&schema, "");
+        assert_eq!(indices, vec![1, 2, 3]); // street=1, city=2, email=3
+
+        // Filter for "city" should return only index 2
+        let indices = get_filtered_primitive_indices(&schema, "city");
+        assert_eq!(indices, vec![2]);
+
+        // Filter for "e" should match street and email
+        let indices = get_filtered_primitive_indices(&schema, "e");
+        assert_eq!(indices, vec![1, 3]); // street has 'e', email has 'e'
+    }
 }

@@ -282,3 +282,180 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
         list.render(area, buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_highlighted_line_basic() {
+        // Test highlighting "user" in "   ├─ user_id"
+        let display = "   ├─ user_id";
+        let name = "user_id";
+        let positions = vec![0, 1, 2, 3]; // "user" positions
+
+        let line = build_highlighted_line(
+            display,
+            name,
+            &positions,
+            Color::White,
+            Color::Yellow,
+            false,
+            Color::Yellow,
+        );
+
+        // Line should have multiple spans
+        assert!(!line.spans.is_empty());
+
+        // First span should be the prefix "   ├─ "
+        assert_eq!(line.spans[0].content, "   ├─ ");
+    }
+
+    #[test]
+    fn test_build_highlighted_line_full_match() {
+        // Test highlighting all of "email"
+        let display = "   └─ email";
+        let name = "email";
+        let positions = vec![0, 1, 2, 3, 4]; // all positions
+
+        let line = build_highlighted_line(
+            display,
+            name,
+            &positions,
+            Color::White,
+            Color::Yellow,
+            false,
+            Color::Yellow,
+        );
+
+        assert!(!line.spans.is_empty());
+        // Should have prefix span and highlighted span
+        assert!(line.spans.len() >= 2);
+    }
+
+    #[test]
+    fn test_build_highlighted_line_fuzzy_match() {
+        // Test highlighting "u", "i", "d" in "user_id" (fuzzy match for "uid")
+        let display = "   ├─ user_id";
+        let name = "user_id";
+        let positions = vec![0, 5, 6]; // u, i, d positions
+
+        let line = build_highlighted_line(
+            display,
+            name,
+            &positions,
+            Color::White,
+            Color::Yellow,
+            false,
+            Color::Yellow,
+        );
+
+        // Should have multiple spans: prefix, u (highlighted), ser_ (normal), id (highlighted)
+        assert!(line.spans.len() >= 3);
+    }
+
+    #[test]
+    fn test_build_highlighted_line_no_match_positions() {
+        // Test with empty positions (should still render, just no highlighting)
+        let display = "   ├─ column";
+        let name = "column";
+        let positions: Vec<usize> = vec![];
+
+        let line = build_highlighted_line(
+            display,
+            name,
+            &positions,
+            Color::White,
+            Color::Yellow,
+            false,
+            Color::Yellow,
+        );
+
+        // Should still produce a valid line
+        assert!(!line.spans.is_empty());
+    }
+
+    #[test]
+    fn test_build_highlighted_line_name_not_found() {
+        // Test when name is not found in display (edge case)
+        let display = "   ├─ something";
+        let name = "other";
+        let positions = vec![0, 1];
+
+        let line = build_highlighted_line(
+            display,
+            name,
+            &positions,
+            Color::White,
+            Color::Yellow,
+            false,
+            Color::Yellow,
+        );
+
+        // Should fall back to plain display
+        assert!(!line.spans.is_empty());
+    }
+
+    #[test]
+    fn test_build_highlighted_line_selected() {
+        let display = "   ├─ user_id";
+        let name = "user_id";
+        let positions = vec![0, 1, 2, 3];
+
+        let line = build_highlighted_line(
+            display,
+            name,
+            &positions,
+            Color::White,
+            Color::Yellow,
+            true, // selected
+            Color::Yellow,
+        );
+
+        // Line should have a style applied for selection
+        assert!(line.style.bg.is_some());
+    }
+
+    #[test]
+    fn test_build_highlighted_line_unicode() {
+        // Test with unicode characters in the display
+        let display = "   ├─ naïve_column";
+        let name = "naïve_column";
+        let positions = vec![0, 1]; // "na" positions
+
+        let line = build_highlighted_line(
+            display,
+            name,
+            &positions,
+            Color::White,
+            Color::Yellow,
+            false,
+            Color::Yellow,
+        );
+
+        // Should handle unicode correctly
+        assert!(!line.spans.is_empty());
+    }
+
+    #[test]
+    fn test_build_highlighted_line_alternating_highlights() {
+        // Test with alternating highlighted positions: a_b_c with positions 0, 2, 4
+        let display = "   ├─ a_b_c";
+        let name = "a_b_c";
+        let positions = vec![0, 2, 4]; // a, b, c
+
+        let line = build_highlighted_line(
+            display,
+            name,
+            &positions,
+            Color::White,
+            Color::Yellow,
+            false,
+            Color::Yellow,
+        );
+
+        // Should have many spans due to alternating
+        // prefix, "a" (highlighted), "_" (normal), "b" (highlighted), "_" (normal), "c" (highlighted)
+        assert!(line.spans.len() >= 5);
+    }
+}
