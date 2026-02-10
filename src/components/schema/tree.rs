@@ -116,7 +116,10 @@ fn build_highlighted_line(
     let name_part = &display[name_start..];
 
     // Build spans for the name with highlighting
-    let mut spans = vec![Span::styled(prefix.to_string(), Style::default().fg(base_color))];
+    let mut spans = vec![Span::styled(
+        prefix.to_string(),
+        Style::default().fg(base_color),
+    )];
 
     // Convert match positions to a set for O(1) lookup
     let match_set: std::collections::HashSet<usize> = match_positions.iter().copied().collect();
@@ -228,9 +231,7 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
                         }
                     }
                     SchemaInfo::Primitive {
-                        display: d,
-                        name,
-                        ..
+                        display: d, name, ..
                     } => {
                         if let Some(positions) = match_positions.get(&idx) {
                             // Has match positions - render with highlighting
