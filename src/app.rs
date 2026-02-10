@@ -3,6 +3,7 @@ use ratatui::DefaultTerminal;
 use std::io;
 
 use crate::file::parquet_ctx::ParquetCtx;
+use crate::search::get_filtered_primitive_indices;
 use crate::tabs::TabManager;
 
 pub struct AppRenderView<'a> {
@@ -160,6 +161,38 @@ impl AppState {
         self.vertical_offset = self.vertical_offset.saturating_sub(1);
     }
 
+    /// Navigate down through filtered primitive indices only.
+    /// filtered_indices should be 1-based primitive column indices.
+    pub fn down_filtered(&mut self, filtered_indices: &[usize]) {
+        if filtered_indices.is_empty() {
+            return;
+        }
+        let current = self.vertical_offset;
+        // Find the next index in filtered list that is > current
+        if let Some(&next) = filtered_indices.iter().find(|&&idx| idx > current) {
+            self.vertical_offset = next;
+        }
+    }
+
+    /// Navigate up through filtered primitive indices only.
+    /// filtered_indices should be 1-based primitive column indices.
+    pub fn up_filtered(&mut self, filtered_indices: &[usize]) {
+        if filtered_indices.is_empty() {
+            return;
+        }
+        let current = self.vertical_offset;
+        if current == 0 {
+            return;
+        }
+        // Find the previous index in filtered list that is < current
+        if let Some(&prev) = filtered_indices.iter().rev().find(|&&idx| idx < current) {
+            self.vertical_offset = prev;
+        } else {
+            // No previous filtered item, go to 0 (deselect)
+            self.vertical_offset = 0;
+        }
+    }
+
     pub fn right(&mut self) {
         self.horizontal_offset += 1;
     }
@@ -282,11 +315,8 @@ impl<'a> App<'a> {
                 KeyCode::Right => self.state.search.move_cursor_right(),
                 KeyCode::Char(c) => self.state.search.push_char(c),
                 KeyCode::Up | KeyCode::Down => {
-                    // Allow navigation while searching
-                    self.tabs
-                        .active_tab()
-                        .on_event(key_event, &mut self.state)
-                        .unwrap();
+                    // Use filtered navigation for Schema and Row Groups tabs
+                    self.handle_filtered_navigation(key_event);
                 }
                 _ => {}
             }
@@ -304,6 +334,12 @@ impl<'a> App<'a> {
                 self.tabs.prev();
                 self.state.reset();
             }
+            KeyCode::Up | KeyCode::Down
+                if self.state.search.confirmed && !self.state.search.query.is_empty() =>
+            {
+                // Use filtered navigation when search is confirmed
+                self.handle_filtered_navigation(key_event);
+            }
             _ => {
                 self.tabs
                     .active_tab()
@@ -315,5 +351,30 @@ impl<'a> App<'a> {
 
     fn exit(&mut self) {
         self.exit = true;
+    }
+
+    /// Handle Up/Down navigation with filtering for Schema and Row Groups tabs
+    fn handle_filtered_navigation(&mut self, key_event: KeyEvent) {
+        let active_tab = self.tabs.active_tab().to_string();
+
+        // Only apply filtered navigation for Schema and Row Groups tabs
+        if active_tab == "Schema" || active_tab == "Row Groups" {
+            let filtered_indices = get_filtered_primitive_indices(
+                &self.parquet_ctx.schema.columns,
+                &self.state.search.query,
+            );
+
+            match key_event.code {
+                KeyCode::Down => self.state.down_filtered(&filtered_indices),
+                KeyCode::Up => self.state.up_filtered(&filtered_indices),
+                _ => {}
+            }
+        } else {
+            // For other tabs, use regular navigation
+            self.tabs
+                .active_tab()
+                .on_event(key_event, &mut self.state)
+                .unwrap();
+        }
     }
 }

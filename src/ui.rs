@@ -13,7 +13,7 @@ use crate::components::{
     RowGroupProgressBar, SchemaTreeComponent, ScrollbarComponent,
 };
 use crate::file::Renderable;
-use crate::search::filter_schema_indices;
+use crate::search::{filter_schema_indices, get_filtered_primitive_indices};
 
 pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
@@ -255,14 +255,33 @@ impl<'a> AppWidget<'a> {
         )
         .render(rg_progress, buf);
 
-        if self.0.state().vertical_offset() > 0 {
+        // Check if we should show column metadata (only for filtered columns when search is active)
+        let vertical_offset = self.0.state().vertical_offset();
+        let search = &self.0.state().search;
+        let show_column_metadata = if vertical_offset > 0 {
+            if !search.query.is_empty() {
+                // Check if the selected column is in the filtered list
+                let filtered_indices = get_filtered_primitive_indices(
+                    &self.0.parquet_ctx.schema.columns,
+                    &search.query,
+                );
+                filtered_indices.contains(&vertical_offset)
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+
+        if show_column_metadata {
             RowGroupColumnMetadataComponent::new(
                 &self.0.parquet_ctx.row_groups.row_groups[self.0.state().horizontal_offset()]
-                    .column_metadata[self.0.state().vertical_offset() - 1],
+                    .column_metadata[vertical_offset - 1],
             )
             .render(central_area, buf);
         } else {
             // Display row group level statistics and charts when no column is selected
+            // or when selected column is not in the filtered list
             RowGroupMetadata::new(
                 &self.0.parquet_ctx.row_groups.row_groups,
                 &self.0.parquet_ctx.row_groups.avg_median_stats,

@@ -1,17 +1,30 @@
 use crate::file::schema::SchemaInfo;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
-/// Filter schema items, returning indices of matches.
+/// Result of fuzzy search including match positions for highlighting
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    /// Indices of matching schema items (preserves tree structure)
+    pub indices: Vec<usize>,
+    /// Match positions for each matching primitive (schema_index -> positions in name)
+    pub match_positions: HashMap<usize, Vec<usize>>,
+}
+
+/// Filter schema items, returning indices of matches with match positions for highlighting.
 /// Preserves tree structure by including parent groups when primitives match.
-pub fn filter_schema_indices(items: &[SchemaInfo], query: &str) -> Vec<usize> {
+pub fn filter_schema_with_positions(items: &[SchemaInfo], query: &str) -> SearchResult {
     if query.is_empty() {
-        return (0..items.len()).collect();
+        return SearchResult {
+            indices: (0..items.len()).collect(),
+            match_positions: HashMap::new(),
+        };
     }
 
     let matcher = SkimMatcherV2::default();
     let mut result = BTreeSet::new();
+    let mut match_positions: HashMap<usize, Vec<usize>> = HashMap::new();
     result.insert(0); // Always include root
 
     let mut current_groups: Vec<usize> = Vec::new();
@@ -25,8 +38,9 @@ pub fn filter_schema_indices(items: &[SchemaInfo], query: &str) -> Vec<usize> {
                 current_groups.push(idx);
             }
             SchemaInfo::Primitive { name, .. } => {
-                if matcher.fuzzy_match(name, query).is_some() {
+                if let Some((_, positions)) = matcher.fuzzy_indices(name, query) {
                     result.insert(idx);
+                    match_positions.insert(idx, positions);
                     for &g in &current_groups {
                         result.insert(g);
                     }
@@ -35,7 +49,46 @@ pub fn filter_schema_indices(items: &[SchemaInfo], query: &str) -> Vec<usize> {
         }
     }
 
-    result.into_iter().collect()
+    SearchResult {
+        indices: result.into_iter().collect(),
+        match_positions,
+    }
+}
+
+/// Filter schema items, returning indices of matches.
+/// Preserves tree structure by including parent groups when primitives match.
+pub fn filter_schema_indices(items: &[SchemaInfo], query: &str) -> Vec<usize> {
+    filter_schema_with_positions(items, query).indices
+}
+
+/// Get filtered primitive column indices (1-based, matching vertical_offset convention).
+/// Returns indices that can be used for navigation when filtering is active.
+pub fn get_filtered_primitive_indices(items: &[SchemaInfo], query: &str) -> Vec<usize> {
+    if query.is_empty() {
+        // Return all primitive indices (1-based)
+        return items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item, SchemaInfo::Primitive { .. }))
+            .enumerate()
+            .map(|(prim_idx, _)| prim_idx + 1) // 1-based
+            .collect();
+    }
+
+    let matcher = SkimMatcherV2::default();
+    let mut primitive_idx = 0usize;
+    let mut result = Vec::new();
+
+    for item in items.iter() {
+        if let SchemaInfo::Primitive { name, .. } = item {
+            primitive_idx += 1; // Increment for each primitive (1-based)
+            if matcher.fuzzy_match(name, query).is_some() {
+                result.push(primitive_idx);
+            }
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]

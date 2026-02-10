@@ -1,13 +1,14 @@
 use crate::file::schema::SchemaInfo;
-use crate::search::filter_schema_indices;
+use crate::search::filter_schema_with_positions;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Stylize},
+    style::{Color, Style, Stylize},
     symbols::border,
     text::{Line, Span},
     widgets::{Block, List, ListItem, Widget},
 };
+use std::collections::HashMap;
 
 pub struct SchemaTreeComponent<'a> {
     pub schema_columns: &'a Vec<SchemaInfo>,
@@ -93,13 +94,82 @@ impl<'a> SchemaTreeComponent<'a> {
     }
 }
 
+/// Build a Line with highlighted match positions for a primitive display string.
+/// The display string format is like "   ├─ column_name", so we need to find
+/// the name portion and apply highlighting to the matched character positions.
+fn build_highlighted_line(
+    display: &str,
+    name: &str,
+    match_positions: &[usize],
+    base_color: Color,
+    highlight_color: Color,
+    is_selected: bool,
+    selected_color: Color,
+) -> Line<'static> {
+    // Find where the name starts in the display string
+    let name_start = match display.rfind(name) {
+        Some(pos) => pos,
+        None => return Line::from(display.to_string()).style(Style::default().fg(base_color)),
+    };
+
+    let prefix = &display[..name_start];
+    let name_part = &display[name_start..];
+
+    // Build spans for the name with highlighting
+    let mut spans = vec![Span::styled(prefix.to_string(), Style::default().fg(base_color))];
+
+    // Convert match positions to a set for O(1) lookup
+    let match_set: std::collections::HashSet<usize> = match_positions.iter().copied().collect();
+
+    // Build spans character by character for the name portion
+    let mut current_span = String::new();
+    let mut is_highlighted = false;
+
+    for (char_idx, c) in name_part.chars().enumerate() {
+        let should_highlight = match_set.contains(&char_idx);
+
+        if should_highlight != is_highlighted && !current_span.is_empty() {
+            // Push the accumulated span
+            let style = if is_highlighted {
+                Style::default().fg(Color::Black).bg(highlight_color)
+            } else {
+                Style::default().fg(base_color)
+            };
+            spans.push(Span::styled(std::mem::take(&mut current_span), style));
+        }
+
+        current_span.push(c);
+        is_highlighted = should_highlight;
+    }
+
+    // Push the final span
+    if !current_span.is_empty() {
+        let style = if is_highlighted {
+            Style::default().fg(Color::Black).bg(highlight_color)
+        } else {
+            Style::default().fg(base_color)
+        };
+        spans.push(Span::styled(current_span, style));
+    }
+
+    let mut line = Line::from(spans);
+    if is_selected {
+        line = line.style(Style::default().bg(selected_color).fg(Color::Black));
+    }
+    line
+}
+
 impl<'a> Widget for SchemaTreeComponent<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Filter schema items if search query is present
-        let filtered_indices: Vec<usize> = match self.search_query {
-            Some(query) if !query.is_empty() => filter_schema_indices(self.schema_columns, query),
-            _ => (0..self.schema_columns.len()).collect(),
-        };
+        let (filtered_indices, match_positions): (Vec<usize>, HashMap<usize, Vec<usize>>) =
+            match self.search_query {
+                Some(query) if !query.is_empty() => {
+                    let result = filter_schema_with_positions(self.schema_columns, query);
+                    (result.indices, result.match_positions)
+                }
+                _ => ((0..self.schema_columns.len()).collect(), HashMap::new()),
+            };
 
         // Create a mapping from primitive column index to schema tree index
         let primitive_to_schema_map: Vec<usize> = self
@@ -157,12 +227,30 @@ impl<'a> Widget for SchemaTreeComponent<'a> {
                             ListItem::new(d.clone()).fg(self.root_color)
                         }
                     }
-                    SchemaInfo::Primitive { display: d, .. } => {
-                        let mut item = ListItem::new(d.clone()).fg(self.primitive_color);
-                        if is_selected {
-                            item = item.bg(self.selected_color).fg(Color::Black);
+                    SchemaInfo::Primitive {
+                        display: d,
+                        name,
+                        ..
+                    } => {
+                        if let Some(positions) = match_positions.get(&idx) {
+                            // Has match positions - render with highlighting
+                            let line = build_highlighted_line(
+                                d,
+                                name,
+                                positions,
+                                self.primitive_color,
+                                self.selected_color, // Use selected_color (yellow) for match highlighting
+                                is_selected,
+                                self.selected_color,
+                            );
+                            ListItem::new(line)
+                        } else {
+                            let mut item = ListItem::new(d.clone()).fg(self.primitive_color);
+                            if is_selected {
+                                item = item.bg(self.selected_color).fg(Color::Black);
+                            }
+                            item
                         }
-                        item
                     }
                     SchemaInfo::Group { display: d, .. } => {
                         ListItem::new(d.clone()).fg(self.group_color)
