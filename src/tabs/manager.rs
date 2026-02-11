@@ -78,6 +78,23 @@ impl TabManager {
                 " : ".into(),
                 "Navigate".into(),
             ])
+        } else if search.confirmed && !search.query.is_empty() {
+            // Show filter-active instructions when a search filter is applied
+            let mut span = self.active_tab().instructions();
+            if !span.is_empty() {
+                span.push(" - ".into());
+            }
+            span.extend(vec![
+                "[Esc]".blue(),
+                " Clear Filter".into(),
+                ", ".into(),
+                "[Tab]".green(),
+                " Next Tab".into(),
+                ", ".into(),
+                "[Q]".blue(),
+                "uit".into(),
+            ]);
+            Line::from(span)
         } else {
             let mut span = self.active_tab().instructions();
             if !span.is_empty() {
