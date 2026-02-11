@@ -13,6 +13,7 @@ use crate::components::{
     RowGroupProgressBar, SchemaTreeComponent, ScrollbarComponent,
 };
 use crate::file::Renderable;
+use crate::search::{filter_schema_indices, get_filtered_primitive_indices};
 
 pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
@@ -122,13 +123,30 @@ impl<'a> AppWidget<'a> {
         }
     }
 
+    // Get filtered indices based on search query
+    fn get_filtered_indices(&self) -> Option<Vec<usize>> {
+        let search = &self.0.state().search;
+        if !search.query.is_empty() {
+            Some(filter_schema_indices(
+                &self.0.parquet_ctx.schema.columns,
+                &search.query,
+            ))
+        } else {
+            None
+        }
+    }
+
     // Render the schema table
     fn render_schema_table(&self, area: Rect, adjusted_scroll: usize, buf: &mut Buffer) {
-        FileSchemaTable::new(&self.0.parquet_ctx.schema)
+        let mut table = FileSchemaTable::new(&self.0.parquet_ctx.schema)
             .with_selected_index(self.0.state().vertical_offset())
             .with_horizontal_scroll(self.0.state().horizontal_offset())
-            .with_vertical_scroll(adjusted_scroll)
-            .render(area, buf);
+            .with_vertical_scroll(adjusted_scroll);
+
+        if let Some(indices) = self.get_filtered_indices() {
+            table = table.with_filtered_indices(indices);
+        }
+        table.render(area, buf);
     }
 
     fn render_tabs_view(&self, area: Rect, buf: &mut Buffer) {
@@ -154,7 +172,9 @@ impl<'a> AppWidget<'a> {
             Layout::horizontal([Constraint::Length(title_width), Constraint::Fill(1)]).areas(area);
         self.0.title.bold().fg(Color::Green).render(title_area, buf);
 
-        self.0.tabs().render_instructions(footer_area, buf);
+        self.0
+            .tabs()
+            .render_instructions(footer_area, buf, &self.0.state().search);
     }
 
     fn render_metadata_view(&self, area: Rect, buf: &mut Buffer) {
@@ -188,11 +208,20 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_schema_tree_with_scroll(&self, area: Rect, scroll_offset: usize, buf: &mut Buffer) {
-        SchemaTreeComponent::new(&self.0.parquet_ctx.schema.columns)
+        let search = &self.0.state().search;
+        let mut component = SchemaTreeComponent::new(&self.0.parquet_ctx.schema.columns)
             .with_title("Schema Tree".to_string())
             .with_selected_index(self.0.state().vertical_offset())
-            .with_scroll_offset(scroll_offset)
-            .render(area, buf);
+            .with_scroll_offset(scroll_offset);
+
+        if search.active || !search.query.is_empty() {
+            component = component.with_search(
+                &search.query,
+                search.active && !search.confirmed,
+                search.cursor_pos,
+            );
+        }
+        component.render(area, buf);
     }
 
     fn render_row_groups_view(&self, area: Rect, buf: &mut Buffer) {
@@ -228,14 +257,33 @@ impl<'a> AppWidget<'a> {
         )
         .render(rg_progress, buf);
 
-        if self.0.state().vertical_offset() > 0 {
+        // Check if we should show column metadata (only for filtered columns when search is active)
+        let vertical_offset = self.0.state().vertical_offset();
+        let search = &self.0.state().search;
+        let show_column_metadata = if vertical_offset > 0 {
+            if !search.query.is_empty() {
+                // Check if the selected column is in the filtered list
+                let filtered_indices = get_filtered_primitive_indices(
+                    &self.0.parquet_ctx.schema.columns,
+                    &search.query,
+                );
+                filtered_indices.contains(&vertical_offset)
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+
+        if show_column_metadata {
             RowGroupColumnMetadataComponent::new(
                 &self.0.parquet_ctx.row_groups.row_groups[self.0.state().horizontal_offset()]
-                    .column_metadata[self.0.state().vertical_offset() - 1],
+                    .column_metadata[vertical_offset - 1],
             )
             .render(central_area, buf);
         } else {
             // Display row group level statistics and charts when no column is selected
+            // or when selected column is not in the filtered list
             RowGroupMetadata::new(
                 &self.0.parquet_ctx.row_groups.row_groups,
                 &self.0.parquet_ctx.row_groups.avg_median_stats,

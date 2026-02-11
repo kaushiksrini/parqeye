@@ -215,6 +215,139 @@ impl FileSchema {
         )
     }
 
+    pub fn generate_table_rows_filtered(
+        &self,
+        selected_index: usize,
+        start_col: usize,
+        num_cols: usize,
+        start_row: usize,
+        num_rows: usize,
+        filtered_indices: &[usize],
+    ) -> (Vec<Row<'_>>, Vec<usize>) {
+        let mut column_widths = vec![0usize; num_cols];
+
+        // Pre-compute mapping from schema index to global 1-based primitive index
+        let schema_to_primitive: std::collections::HashMap<usize, usize> = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, col)| matches!(col, SchemaInfo::Primitive { .. }))
+            .enumerate()
+            .map(|(prim_idx, (schema_idx, _))| (schema_idx, prim_idx + 1))
+            .collect();
+
+        let rows = filtered_indices
+            .iter()
+            .filter(|&&idx| idx > 0) // Skip root at index 0
+            .skip(start_row)
+            .take(num_rows)
+            .filter_map(|&idx| {
+                let col = &self.columns[idx];
+                if let SchemaInfo::Primitive { info, stats, .. } = col {
+                    let compression_ratio = if stats.total_uncompressed_size > 0 {
+                        format!(
+                            "{:.2}x",
+                            stats.total_uncompressed_size as f64
+                                / stats.total_compressed_size as f64
+                        )
+                    } else {
+                        "N/A".to_string()
+                    };
+
+                    let is_selected = selected_index > 0
+                        && schema_to_primitive
+                            .get(&idx)
+                            .is_some_and(|&prim_idx| prim_idx == selected_index);
+
+                    // Create all cells first
+                    let all_cells = vec![
+                        info.repetition.clone(),
+                        info.physical.clone(),
+                        format_size(stats.total_compressed_size),
+                        format_size(stats.total_uncompressed_size),
+                        compression_ratio,
+                        info.encoding.clone(),
+                        info.codec.clone(),
+                        stats.min.clone().unwrap_or_else(|| "NULL".to_string()),
+                        stats.max.clone().unwrap_or_else(|| "NULL".to_string()),
+                        stats.nulls.to_string(),
+                    ];
+
+                    // Select only the visible columns and track their content lengths
+                    let visible_cell_contents: Vec<_> = all_cells
+                        .into_iter()
+                        .skip(start_col)
+                        .take(num_cols)
+                        .collect();
+
+                    // Update column widths with the maximum seen so far
+                    for (col_idx, content) in visible_cell_contents.iter().enumerate() {
+                        column_widths[col_idx] = column_widths[col_idx].max(content.len());
+                    }
+
+                    // Create cells from the content
+                    let visible_cells: Vec<_> =
+                        visible_cell_contents.into_iter().map(Cell::from).collect();
+
+                    let mut row = Row::new(visible_cells);
+
+                    if is_selected {
+                        row = row.style(
+                            ratatui::style::Style::default()
+                                .bg(Color::Yellow)
+                                .fg(Color::Black),
+                        );
+                    }
+
+                    Some(row)
+                } else if let SchemaInfo::Group { repetition, .. } = col {
+                    let all_cells = vec![
+                        repetition.clone(),
+                        "group".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                    ];
+
+                    let visible_cell_contents: Vec<_> = all_cells
+                        .into_iter()
+                        .skip(start_col)
+                        .take(num_cols)
+                        .collect();
+
+                    // Update column widths with the maximum seen so far
+                    for (col_idx, content) in visible_cell_contents.iter().enumerate() {
+                        column_widths[col_idx] = column_widths[col_idx].max(content.len());
+                    }
+
+                    let visible_cells: Vec<_> = visible_cell_contents
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, content)| {
+                            if idx == 0 || idx == 1 {
+                                Cell::from(content.green())
+                            } else {
+                                Cell::from(content)
+                            }
+                        })
+                        .collect();
+
+                    let row = Row::new(visible_cells);
+                    Some(row)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        (rows, column_widths)
+    }
+
     pub fn generate_table_rows_with_scroll(
         &self,
         selected_index: usize,

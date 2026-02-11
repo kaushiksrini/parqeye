@@ -1,3 +1,4 @@
+use crate::app::SearchState;
 use crate::file::Renderable;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -61,19 +62,53 @@ impl TabManager {
         &self.tabs[self.active_tab]
     }
 
-    pub fn render_instructions(&self, area: Rect, buf: &mut Buffer) {
-        let mut span = self.active_tab().instructions();
-        if !span.is_empty() {
-            span.push(" - ".into());
-        }
-        span.extend(vec![
-            "[Tab]".green(),
-            " Next Tab".into(),
-            ", ".into(),
-            "[Q]".blue(),
-            "uit".into(),
-        ]);
-        let line = Line::from(span);
+    pub fn render_instructions(&self, area: Rect, buf: &mut Buffer, search: &SearchState) {
+        let line = if search.active {
+            // Show search-specific instructions when typing a search query
+            Line::from(vec![
+                "[Esc]".blue(),
+                " Exit Search".into(),
+                ", ".into(),
+                "[Enter]".green(),
+                " Confirm".into(),
+                ", ".into(),
+                "↑".green(),
+                "/".white(),
+                "↓".blue(),
+                " : ".into(),
+                "Navigate".into(),
+            ])
+        } else if search.confirmed && !search.query.is_empty() {
+            // Show filter-active instructions when a search filter is applied
+            let mut span = self.active_tab().instructions();
+            if !span.is_empty() {
+                span.push(" - ".into());
+            }
+            span.extend(vec![
+                "[Esc]".blue(),
+                " Clear Filter".into(),
+                ", ".into(),
+                "[Tab]".green(),
+                " Next Tab".into(),
+                ", ".into(),
+                "[Q]".blue(),
+                "uit".into(),
+            ]);
+            Line::from(span)
+        } else {
+            let mut span = self.active_tab().instructions();
+            if !span.is_empty() {
+                span.push(" - ".into());
+            }
+            span.extend(vec![
+                "[Tab]".green(),
+                " Next Tab".into(),
+                ", ".into(),
+                "[Q]".blue(),
+                "uit".into(),
+            ]);
+            Line::from(span)
+        };
 
         // Calculate the width of the instruction text
         let instruction_width = line.width() as u16;
