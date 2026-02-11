@@ -172,7 +172,9 @@ impl<'a> AppWidget<'a> {
             Layout::horizontal([Constraint::Length(title_width), Constraint::Fill(1)]).areas(area);
         self.0.title.bold().fg(Color::Green).render(title_area, buf);
 
-        self.0.tabs().render_instructions(footer_area, buf);
+        self.0
+            .tabs()
+            .render_instructions(footer_area, buf, &self.0.state().search);
     }
 
     fn render_metadata_view(&self, area: Rect, buf: &mut Buffer) {

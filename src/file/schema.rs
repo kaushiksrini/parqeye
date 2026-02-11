@@ -224,8 +224,17 @@ impl FileSchema {
         num_rows: usize,
         filtered_indices: &[usize],
     ) -> (Vec<Row<'_>>, Vec<usize>) {
-        let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
         let mut column_widths = vec![0usize; num_cols];
+
+        // Pre-compute mapping from schema index to global 1-based primitive index
+        let schema_to_primitive: std::collections::HashMap<usize, usize> = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, col)| matches!(col, SchemaInfo::Primitive { .. }))
+            .enumerate()
+            .map(|(prim_idx, (schema_idx, _))| (schema_idx, prim_idx + 1))
+            .collect();
 
         let rows = filtered_indices
             .iter()
@@ -245,8 +254,10 @@ impl FileSchema {
                         "N/A".to_string()
                     };
 
-                    let is_selected =
-                        selected_index > 0 && (selected_index - start_row) == primitive_index;
+                    let is_selected = selected_index > 0
+                        && schema_to_primitive
+                            .get(&idx)
+                            .is_some_and(|&prim_idx| prim_idx == selected_index);
 
                     // Create all cells first
                     let all_cells = vec![
@@ -288,7 +299,6 @@ impl FileSchema {
                         );
                     }
 
-                    primitive_index += 1;
                     Some(row)
                 } else if let SchemaInfo::Group { repetition, .. } = col {
                     let all_cells = vec![
