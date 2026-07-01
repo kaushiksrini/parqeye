@@ -8,7 +8,7 @@ use ratatui::{
     style::Stylize,
     symbols::border,
     text::{Line, Span, Text},
-    widgets::{Block, Cell, Paragraph, Row, Table},
+    widgets::{Block, Cell, Paragraph, Row, Table, Wrap},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -264,6 +264,7 @@ impl FileMetadata {
         }
 
         Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
             .scroll((start as u16, 0))
             .block(
                 Block::bordered()
