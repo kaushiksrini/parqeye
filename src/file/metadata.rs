@@ -8,7 +8,7 @@ use ratatui::{
     style::Stylize,
     symbols::border,
     text::{Line, Span, Text},
-    widgets::{Block, Cell, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Cell, Paragraph, Row, Table},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -16,6 +16,17 @@ use crate::components::ScrollbarComponent;
 use crate::file::Renderable;
 use crate::file::utils::commas;
 use crate::file::utils::human_readable_bytes;
+
+/// Wrap a single line into chunks of at most `width` characters.
+fn wrap_line(line: &str, width: usize) -> Vec<String> {
+    if width == 0 || line.is_empty() {
+        return vec![line.to_string()];
+    }
+    line.as_bytes()
+        .chunks(width)
+        .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+        .collect()
+}
 
 #[derive(Debug)]
 pub struct FileMetadata {
@@ -229,21 +240,28 @@ impl FileMetadata {
             return;
         }
 
-        // Build styled display lines: key header then 2-space-indented value (JSON pretty-printed).
+        // Available width inside borders (2) minus potential scrollbar (1).
+        let wrap_width = area.width.saturating_sub(3) as usize;
+
+        // Build pre-wrapped display lines so line count matches rendered height exactly.
         let mut lines: Vec<Line> = Vec::new();
         for (i, (key, value)) in props.iter().enumerate() {
             if i > 0 {
                 lines.push(Line::from(""));
             }
             lines.push(Line::from(Span::from(key.as_str()).bold().fg(Color::Blue)));
-            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(value) {
-                let pretty =
-                    serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| value.clone());
-                for json_line in pretty.lines() {
-                    lines.push(Line::from(format!("  {json_line}")));
-                }
+
+            let expanded = if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(value) {
+                serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| value.clone())
             } else {
-                lines.push(Line::from(format!("  {value}")));
+                value.clone()
+            };
+
+            for text_line in expanded.lines() {
+                let indented = format!("  {text_line}");
+                for wrapped in wrap_line(&indented, wrap_width) {
+                    lines.push(Line::from(wrapped));
+                }
             }
         }
 
@@ -264,7 +282,6 @@ impl FileMetadata {
         }
 
         Paragraph::new(Text::from(lines))
-            .wrap(Wrap { trim: false })
             .scroll((start as u16, 0))
             .block(
                 Block::bordered()
