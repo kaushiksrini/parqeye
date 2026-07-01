@@ -41,8 +41,7 @@ impl Tab for MetadataTab {
             match key_event.code {
                 KeyCode::Up if state.vertical_offset() > 0 => state.up(),
                 KeyCode::Down
-                    if state.vertical_offset()
-                        < self.max_vertical_scroll.unwrap_or(usize::MAX) =>
+                    if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) =>
                 {
                     state.down()
                 }

@@ -121,11 +121,8 @@ impl FileMetadata {
             return;
         }
 
-        let [stats_area, props_area] = Layout::horizontal([
-            Constraint::Fill(2),
-            Constraint::Fill(1),
-        ])
-        .areas(area);
+        let [stats_area, props_area] =
+            Layout::horizontal([Constraint::Fill(2), Constraint::Fill(1)]).areas(area);
 
         self.render_stats_centered(stats_area, buf);
         self.render_properties(props_area, buf, scroll);
@@ -137,14 +134,14 @@ impl FileMetadata {
             .enumerate()
             .map(|(i, (_, value))| {
                 let separator = if i > 0 { 1 } else { 0 };
-                let value_lines =
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(value) {
-                        serde_json::to_string_pretty(&json)
-                            .map(|s| s.lines().count())
-                            .unwrap_or(1)
-                    } else {
-                        1
-                    };
+                let value_lines = if let Ok(json) = serde_json::from_str::<serde_json::Value>(value)
+                {
+                    serde_json::to_string_pretty(&json)
+                        .map(|s| s.lines().count())
+                        .unwrap_or(1)
+                } else {
+                    1
+                };
                 separator + 1 + value_lines
             })
             .sum()
@@ -240,8 +237,8 @@ impl FileMetadata {
             }
             lines.push(Line::from(Span::from(key.as_str()).bold().fg(Color::Blue)));
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(value) {
-                let pretty = serde_json::to_string_pretty(&json_val)
-                    .unwrap_or_else(|_| value.clone());
+                let pretty =
+                    serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| value.clone());
                 for json_line in pretty.lines() {
                     lines.push(Line::from(format!("  {json_line}")));
                 }

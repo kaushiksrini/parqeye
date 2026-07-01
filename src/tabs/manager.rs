@@ -33,8 +33,7 @@ impl TabManager {
                         .with_max_rows(sample_data_rows),
                 ),
                 Box::new(
-                    MetadataTab::new()
-                        .with_max_vertical_scroll(num_properties.saturating_sub(1)),
+                    MetadataTab::new().with_max_vertical_scroll(num_properties.saturating_sub(1)),
                 ),
                 Box::new(SchemaTab::new().with_max_vertical_scroll(num_columns)),
                 Box::new(
