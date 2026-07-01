@@ -2189,6 +2189,7 @@ dependencies = [
  "parquet-format",
  "polars",
  "ratatui",
+ "serde_json",
 ]
 
 [[package]]

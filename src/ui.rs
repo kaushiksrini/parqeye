@@ -158,8 +158,10 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_metadata_view(&self, area: Rect, buf: &mut Buffer) {
-        // render the metadata
-        self.0.parquet_ctx.metadata.render_content(area, buf);
+        self.0
+            .parquet_ctx
+            .metadata
+            .render_with_scroll(area, buf, self.0.state().vertical_offset());
     }
 
     fn render_schema_view(&self, area: Rect, buf: &mut Buffer) {

@@ -1,8 +1,9 @@
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::style::Stylize;
+use ratatui::text::Span;
 use std::io;
 
 use crate::{app::AppState, tabs::Tab};
-use ratatui::text::Span;
 
 pub struct MetadataTab {
     pub max_horizontal_scroll: Option<usize>,
@@ -35,13 +36,34 @@ impl MetadataTab {
 }
 
 impl Tab for MetadataTab {
-    #[allow(unused_variables)]
     fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error> {
+        if self.max_vertical_scroll.is_some() {
+            match key_event.code {
+                KeyCode::Up if state.vertical_offset() > 0 => state.up(),
+                KeyCode::Down
+                    if state.vertical_offset()
+                        < self.max_vertical_scroll.unwrap_or(usize::MAX) =>
+                {
+                    state.down()
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
     fn instructions(&self) -> Vec<Span<'static>> {
-        vec![]
+        if self.max_vertical_scroll.map(|n| n > 0).unwrap_or(false) {
+            vec![
+                "↑".green(),
+                "/".white(),
+                "↓".blue(),
+                " : ".into(),
+                "Scroll properties".into(),
+            ]
+        } else {
+            vec![]
+        }
     }
 
     fn to_string(&self) -> String {
