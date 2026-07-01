@@ -53,7 +53,7 @@ cargo install parqeye
 If you have Homebrew, you can install using:
 
 ```sh
-brew install kaushiksrini/parqeye/parqeye
+brew install parqeye
 ```
 
 # License
