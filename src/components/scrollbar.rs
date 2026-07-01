@@ -63,13 +63,13 @@ impl ScrollbarComponent {
 
         let thumb_size = ((self.visible_items * track_length) / self.total_items).max(1);
         let max_position = self.total_items.saturating_sub(self.visible_items);
-        let thumb_position = if max_position == 0 {
-            0
+        if let Some(thumb_position) =
+            (self.position * (track_length - thumb_size)).checked_div(max_position)
+        {
+            (thumb_size, thumb_position)
         } else {
-            (self.position * (track_length - thumb_size)) / max_position
-        };
-
-        (thumb_size, thumb_position)
+            (thumb_size, 0)
+        }
     }
 }
 

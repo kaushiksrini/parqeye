@@ -344,8 +344,9 @@ impl<'a> Widget for DataTable<'a> {
         self.render_header_separator(buf, area, x_row_separator, y_first_record);
 
         // Render data rows
-        let mut y_offset = y_first_record;
-        for (row_idx, row_data) in visible_rows.iter().enumerate() {
+        for (y_offset, (row_idx, row_data)) in
+            (y_first_record..).zip(visible_rows.iter().enumerate())
+        {
             if y_offset >= rows_area.bottom() {
                 break;
             }
@@ -363,7 +364,6 @@ impl<'a> Widget for DataTable<'a> {
                 is_selected,
                 area.width,
             );
-            y_offset += 1;
         }
 
         // Render vertical separator after row numbers
