@@ -70,12 +70,9 @@ impl Tab for VisualizeTab {
             }
             // Column navigation (Left/Right arrows)
             KeyCode::Left if state.horizontal_offset() > 0 => state.left(),
-            KeyCode::Right
-                if state.horizontal_offset()
-                    < self.max_horizontal_scroll.unwrap_or(usize::MAX) - 1 =>
-            {
-                state.right()
-            }
+            // Upper bound is enforced in AppState against the on-screen column
+            // count each frame, so no guard is needed here.
+            KeyCode::Right => state.right(),
             _ => {}
         }
         Ok(())

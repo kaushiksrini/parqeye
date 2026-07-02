@@ -51,6 +51,9 @@ pub struct AppState {
     tree_scroll_offset: usize,
     data_vertical_scroll: usize,
     visible_data_rows: usize,
+    // Upper bound for `horizontal_offset`, recomputed each frame from the
+    // on-screen column count. Prevents scrolling past the last visible column.
+    max_horizontal_offset: usize,
 }
 
 impl Default for AppState {
@@ -67,6 +70,7 @@ impl AppState {
             tree_scroll_offset: 0,
             data_vertical_scroll: 0,
             visible_data_rows: 20, // Default fallback
+            max_horizontal_offset: usize::MAX,
         }
     }
 
@@ -94,11 +98,18 @@ impl AppState {
     }
 
     pub fn right(&mut self) {
-        self.horizontal_offset += 1;
+        self.horizontal_offset = (self.horizontal_offset + 1).min(self.max_horizontal_offset);
     }
 
     pub fn left(&mut self) {
         self.horizontal_offset = self.horizontal_offset.saturating_sub(1);
+    }
+
+    /// Set the upper bound for horizontal scrolling and clamp the current offset
+    /// to it (handles overshoot from a previous frame and terminal resizes).
+    pub fn set_max_horizontal_offset(&mut self, max: usize) {
+        self.max_horizontal_offset = max;
+        self.horizontal_offset = self.horizontal_offset.min(max);
     }
 
     pub fn tree_scroll_offset(&self) -> usize {
@@ -187,6 +198,20 @@ impl<'a> App<'a> {
             let visible_data_rows = (terminal_size.height.saturating_sub(7) as usize).max(1);
             self.state.set_visible_data_rows(visible_data_rows);
 
+            // Bound horizontal column scrolling on the Visualize tab to what
+            // actually fits, so it can't overshoot the last visible column (which
+            // left phantom offset, causing "empty" presses when scrolling back).
+            // The data table spans the full terminal width, so it is the width we
+            // pass here. Other tabs keep their own bounds (unbounded here).
+            let max_horizontal_offset = if self.tabs.active_tab().to_string() == "Visualize" {
+                crate::components::DataTable::new(&self.parquet_ctx.sample_data)
+                    .with_vertical_scroll(self.state.data_vertical_scroll())
+                    .max_horizontal_scroll(terminal_size.width)
+            } else {
+                usize::MAX
+            };
+            self.state.set_max_horizontal_offset(max_horizontal_offset);
+
             let render_view = AppRenderView::from_app(self);
             terminal.draw(|frame| crate::ui::render_app(&render_view, frame))?;
             self.handle_events()?;
@@ -227,5 +252,47 @@ impl<'a> App<'a> {
 
     fn exit(&mut self) {
         self.exit = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_right_is_clamped_to_max_horizontal_offset() {
+        let mut state = AppState::new();
+        state.set_max_horizontal_offset(3);
+        for _ in 0..10 {
+            state.right();
+        }
+        // Without the clamp the offset would run past the visible range,
+        // producing the "empty clicks" seen when scrolling back.
+        assert_eq!(state.horizontal_offset(), 3);
+    }
+
+    #[test]
+    fn test_left_saturates_at_zero() {
+        let mut state = AppState::new();
+        state.set_max_horizontal_offset(5);
+        state.right();
+        state.right();
+        state.left();
+        state.left();
+        state.left();
+        assert_eq!(state.horizontal_offset(), 0);
+    }
+
+    #[test]
+    fn test_shrinking_the_max_clamps_the_current_offset() {
+        let mut state = AppState::new();
+        state.set_max_horizontal_offset(10);
+        for _ in 0..10 {
+            state.right();
+        }
+        assert_eq!(state.horizontal_offset(), 10);
+        // e.g. the terminal was widened, so fewer columns need scrolling.
+        state.set_max_horizontal_offset(4);
+        assert_eq!(state.horizontal_offset(), 4);
     }
 }
