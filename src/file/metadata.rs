@@ -3,18 +3,30 @@ use parquet::file::metadata::ParquetMetaData;
 use ratatui::widgets::Widget;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Rect},
+    layout::{Constraint, Layout, Rect},
     prelude::Color,
     style::Stylize,
     symbols::border,
-    text::Line,
-    widgets::{Block, Cell, Row, Table},
+    text::{Line, Span, Text},
+    widgets::{Block, Cell, Paragraph, Row, Table},
 };
 use std::collections::{HashMap, HashSet};
 
+use crate::components::ScrollbarComponent;
 use crate::file::Renderable;
 use crate::file::utils::commas;
 use crate::file::utils::human_readable_bytes;
+
+/// Wrap a single line into chunks of at most `width` characters.
+fn wrap_line(line: &str, width: usize) -> Vec<String> {
+    if width == 0 || line.is_empty() {
+        return vec![line.to_string()];
+    }
+    line.as_bytes()
+        .chunks(width)
+        .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+        .collect()
+}
 
 #[derive(Debug)]
 pub struct FileMetadata {
@@ -29,6 +41,7 @@ pub struct FileMetadata {
     pub codecs: String,
     pub encodings: String,
     pub avg_row_size: u64,
+    pub key_value_metadata: Vec<(String, String)>,
 }
 
 impl FileMetadata {
@@ -85,6 +98,16 @@ impl FileMetadata {
             .collect::<Vec<String>>()
             .join(", ");
 
+        let key_value_metadata = md
+            .file_metadata()
+            .key_value_metadata()
+            .map(|kv| {
+                kv.iter()
+                    .map(|pair| (pair.key.clone(), pair.value.clone().unwrap_or_default()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(FileMetadata {
             format_version: format_version.to_string(),
             created_by: created_by.to_string(),
@@ -97,12 +120,53 @@ impl FileMetadata {
             codecs,
             encodings,
             avg_row_size: avg_row_size as u64,
+            key_value_metadata,
         })
     }
 }
 
-impl Renderable for FileMetadata {
-    fn render_content(&self, area: Rect, buf: &mut Buffer) {
+impl FileMetadata {
+    pub fn render_with_scroll(&self, area: Rect, buf: &mut Buffer, scroll: usize) {
+        if self.key_value_metadata.is_empty() {
+            self.render_stats_centered(area, buf);
+            return;
+        }
+
+        let [stats_area, props_area] =
+            Layout::horizontal([Constraint::Fill(2), Constraint::Fill(1)]).areas(area);
+
+        self.render_stats_centered(stats_area, buf);
+        self.render_properties(props_area, buf, scroll);
+    }
+
+    pub fn total_property_display_lines(&self) -> usize {
+        self.key_value_metadata
+            .iter()
+            .enumerate()
+            .map(|(i, (_, value))| {
+                let separator = if i > 0 { 1 } else { 0 };
+                let value_lines = if let Ok(json) = serde_json::from_str::<serde_json::Value>(value)
+                {
+                    serde_json::to_string_pretty(&json)
+                        .map(|s| s.lines().count())
+                        .unwrap_or(1)
+                } else {
+                    1
+                };
+                separator + 1 + value_lines
+            })
+            .sum()
+    }
+
+    /// Total byte size of all key-value metadata (keys + values).
+    pub fn properties_size(&self) -> u64 {
+        self.key_value_metadata
+            .iter()
+            .map(|(k, v)| (k.len() + v.len()) as u64)
+            .sum()
+    }
+
+    fn render_stats_centered(&self, area: Rect, buf: &mut Buffer) {
         let kv_pairs: Vec<(String, String)> = vec![
             ("Format version".into(), self.format_version.clone()),
             ("Created by".into(), self.created_by.clone()),
@@ -121,6 +185,10 @@ impl Renderable for FileMetadata {
             ("Codecs (cols)".into(), self.codecs.clone()),
             ("Encodings".into(), self.encodings.clone()),
             ("Avg row size".into(), format!("{} B", self.avg_row_size)),
+            (
+                "Properties size".into(),
+                human_readable_bytes(self.properties_size()),
+            ),
         ];
 
         let max_value_size = kv_pairs.iter().map(|(_, v)| v.len()).max().unwrap_or(0) as u16;
@@ -135,20 +203,21 @@ impl Renderable for FileMetadata {
             })
             .collect();
 
-        // Calculate centered area for the table
-        let key_width = 18;
-        let value_width = max_value_size.max(20); // Ensure minimum width
-        let table_width = key_width + value_width + 3; // +3 for spacing and borders
+        let key_width = 18u16;
+        let value_width = max_value_size.max(20);
+        let table_width = key_width + value_width + 3;
         let table_height = rows.len() as u16;
         let center_x = area.x + (area.width.saturating_sub(table_width)) / 2;
         let center_y = area.y + (area.height.saturating_sub(table_height)) / 2;
 
-        let centered_area = Rect {
+        // Clamp to area bounds so the stats box never bleeds into the properties panel.
+        let proposed = Rect {
             x: center_x,
             y: center_y,
             width: table_width + 2,
             height: table_height + 2,
         };
+        let centered_area = proposed.intersection(area);
 
         let table = Table::new(
             rows,
@@ -163,6 +232,76 @@ impl Renderable for FileMetadata {
                 .border_set(border::ROUNDED),
         );
         table.render(centered_area, buf);
+    }
+
+    fn render_properties(&self, area: Rect, buf: &mut Buffer, scroll: usize) {
+        let props = &self.key_value_metadata;
+        if props.is_empty() {
+            return;
+        }
+
+        // Available width inside borders (2) minus potential scrollbar (1).
+        let wrap_width = area.width.saturating_sub(3) as usize;
+
+        // Build pre-wrapped display lines so line count matches rendered height exactly.
+        let mut lines: Vec<Line> = Vec::new();
+        for (i, (key, value)) in props.iter().enumerate() {
+            if i > 0 {
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(Span::from(key.as_str()).bold().fg(Color::Blue)));
+
+            let expanded = if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(value) {
+                serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| value.clone())
+            } else {
+                value.clone()
+            };
+
+            for text_line in expanded.lines() {
+                let indented = format!("  {text_line}");
+                for wrapped in wrap_line(&indented, wrap_width) {
+                    lines.push(Line::from(wrapped));
+                }
+            }
+        }
+
+        let total_lines = lines.len();
+        let visible_height = area.height.saturating_sub(2) as usize;
+        let needs_scrollbar = total_lines > visible_height;
+        let start = scroll.min(total_lines.saturating_sub(visible_height));
+
+        let [para_area, scrollbar_area] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(if needs_scrollbar { 1 } else { 0 }),
+        ])
+        .areas(area);
+
+        if needs_scrollbar {
+            ScrollbarComponent::vertical(total_lines, visible_height, start)
+                .render(scrollbar_area, buf);
+        }
+
+        Paragraph::new(Text::from(lines))
+            .scroll((start as u16, 0))
+            .block(
+                Block::bordered()
+                    .title(
+                        Line::from(
+                            Span::from(format!("Properties ({})", props.len()))
+                                .yellow()
+                                .bold(),
+                        )
+                        .centered(),
+                    )
+                    .border_set(border::ROUNDED),
+            )
+            .render(para_area, buf);
+    }
+}
+
+impl Renderable for FileMetadata {
+    fn render_content(&self, area: Rect, buf: &mut Buffer) {
+        self.render_with_scroll(area, buf, 0);
     }
 }
 

@@ -168,6 +168,7 @@ impl<'a> App<'a> {
             file_info.schema.column_size(),
             file_info.row_groups.num_row_groups(),
             sample_data_rows,
+            file_info.metadata.total_property_display_lines(),
         );
 
         Self {
