@@ -1,6 +1,8 @@
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
+use std::path::PathBuf;
 
+use crate::file::error::FileIOError;
 use crate::file::metadata::FileMetadata;
 use crate::file::row_groups::RowGroups;
 use crate::file::sample_data::ParquetSampleData;
@@ -14,18 +16,45 @@ pub struct ParquetCtx {
 }
 
 impl ParquetCtx {
-    pub fn from_file(file_path: &str) -> Result<ParquetCtx, Box<dyn std::error::Error>> {
-        let file = File::open(file_path)?;
-        let reader: SerializedFileReader<File> = SerializedFileReader::new(file)?;
+    pub fn from_file(file_path: &str) -> Result<ParquetCtx, FileIOError> {
+        let path = PathBuf::from(file_path);
+
+        let file = File::open(&path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => FileIOError::FileNotFound { path: path.clone() },
+            std::io::ErrorKind::PermissionDenied => {
+                FileIOError::PermissionDenied { path: path.clone() }
+            }
+            _ => FileIOError::Io { source: e },
+        })?;
+
+        let reader: SerializedFileReader<File> =
+            SerializedFileReader::new(file).map_err(|e| FileIOError::InvalidParquet {
+                path: path.clone(),
+                details: e.to_string(),
+            })?;
+
         let md = reader.metadata();
-        let row_groups = RowGroups::from_file_reader(&reader)?;
 
-        // TODO: async calls?
-        let metadata = FileMetadata::from_metadata(md)?;
-        let schema = FileSchema::from_metadata(md)?;
+        let row_groups = RowGroups::from_file_reader(&reader).map_err(|e| {
+            FileIOError::MetadataError {
+                details: format!("Failed to read row groups: {e}"),
+            }
+        })?;
 
-        // Read sample data
-        let sample_data = ParquetSampleData::read_sample_data(file_path)?;
+        let metadata =
+            FileMetadata::from_metadata(md).map_err(|e| FileIOError::MetadataError {
+                details: format!("Failed to read file metadata: {e}"),
+            })?;
+
+        let schema = FileSchema::from_metadata(md).map_err(|e| FileIOError::MetadataError {
+            details: format!("Failed to parse schema: {e}"),
+        })?;
+
+        let sample_data = ParquetSampleData::read_sample_data(file_path).map_err(|e| {
+            FileIOError::SampleDataError {
+                details: e.to_string(),
+            }
+        })?;
 
         Ok(ParquetCtx {
             file_path: file_path.to_string(),
@@ -38,5 +67,98 @@ impl ParquetCtx {
 
     pub fn column_size(&self) -> usize {
         self.schema.column_size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_data_path(filename: &str) -> String {
+        format!("{}/{}", crate::file::parquet_test_data(), filename)
+    }
+
+    #[test]
+    fn test_file_not_found() {
+        let path = test_data_path("this_file_does_not_exist.parquet");
+        let Err(err) = ParquetCtx::from_file(&path) else {
+            panic!("Expected error for nonexistent file");
+        };
+        assert!(
+            matches!(err, FileIOError::FileNotFound { .. }),
+            "Expected FileNotFound, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_non_parquet_file() {
+        let path = test_data_path("README.md");
+        let Err(err) = ParquetCtx::from_file(&path) else {
+            panic!("Expected error for non-parquet file");
+        };
+        assert!(
+            matches!(err, FileIOError::InvalidParquet { .. }),
+            "Expected InvalidParquet, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_valid_parquet_file_alltypes_plain() {
+        let path = test_data_path("alltypes_plain.parquet");
+        let result = ParquetCtx::from_file(&path);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_valid_parquet_file_alltypes_dictionary() {
+        let path = test_data_path("alltypes_dictionary.parquet");
+        let result = ParquetCtx::from_file(&path);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_valid_parquet_file_nulls() {
+        let path = test_data_path("nulls.snappy.parquet");
+        let result = ParquetCtx::from_file(&path);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_file_not_found_error_contains_path() {
+        let path = test_data_path("nonexistent.parquet");
+        let Err(err) = ParquetCtx::from_file(&path) else {
+            panic!("Expected error for nonexistent file");
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nonexistent.parquet"),
+            "Error message should contain the file path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_parquet_error_contains_path() {
+        let path = test_data_path("README.md");
+        let Err(err) = ParquetCtx::from_file(&path) else {
+            panic!("Expected error for non-parquet file");
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("README.md"),
+            "Error message should contain the file path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_corrupt_parquet_from_bad_data() {
+        let path = format!(
+            "{}/../../parquet-testing/bad_data/PARQUET-1481.parquet",
+            crate::file::parquet_test_data()
+        );
+        let result = ParquetCtx::from_file(&path);
+        assert!(
+            result.is_err(),
+            "Expected error for corrupt parquet file"
+        );
     }
 }

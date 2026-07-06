@@ -1,6 +1,6 @@
 use parqeye::app::App;
+use parqeye::file::error::FileIOError;
 use parqeye::file::parquet_ctx::ParquetCtx;
-use std::io;
 
 use clap::Parser;
 
@@ -15,19 +15,21 @@ pub struct Opts {
     pub path: String,
 }
 
-fn main() -> io::Result<()> {
+fn main() {
     let opts = Opts::parse();
-    tui(&opts.path)?;
-    Ok(())
+    if let Err(e) = run(&opts.path) {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    }
 }
 
-fn tui(path: &str) -> io::Result<()> {
+fn run(path: &str) -> Result<(), FileIOError> {
+    let file_info = ParquetCtx::from_file(path)?;
+
     let mut terminal = ratatui::init();
-
-    let file_info = ParquetCtx::from_file(path).map_err(|e| io::Error::other(e.to_string()))?;
-
     let mut app = App::new(&file_info);
-    app.run(&mut terminal)?;
+    let result = app.run(&mut terminal);
     ratatui::restore();
-    Ok(())
+
+    result.map_err(|e| FileIOError::Io { source: e })
 }
