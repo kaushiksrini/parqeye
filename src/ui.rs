@@ -231,9 +231,13 @@ impl<'a> AppWidget<'a> {
         .render(rg_progress, buf);
 
         if self.0.state().vertical_offset() > 0 {
+            let rg_idx = self.0.state().horizontal_offset();
+            let col_idx = self.0.state().vertical_offset() - 1;
+            // Read this column's pages lazily (and cached) — only the selected column.
+            let pages = self.0.parquet_ctx.page_info(rg_idx, col_idx);
             RowGroupColumnMetadataComponent::new(
-                &self.0.parquet_ctx.row_groups.row_groups[self.0.state().horizontal_offset()]
-                    .column_metadata[self.0.state().vertical_offset() - 1],
+                &self.0.parquet_ctx.row_groups.row_groups[rg_idx].column_metadata[col_idx],
+                &pages,
             )
             .render(central_area, buf);
         } else {
