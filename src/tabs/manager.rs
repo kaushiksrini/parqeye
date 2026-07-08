@@ -93,13 +93,49 @@ impl TabManager {
 
 impl Renderable for TabManager {
     fn render_content(&self, area: Rect, buf: &mut Buffer) {
-        let tab_titles: Vec<Line> = self
-            .tabs
+        if area.width == 0 {
+            return;
+        }
+
+        let titles: Vec<String> = self.tabs.iter().map(|t| t.to_string()).collect();
+
+        // Each tab occupies its title plus one space of padding on each side
+        // (matching `.padding(" ", " ")`); tabs are separated by a single divider.
+        const PADDING: u16 = 2;
+        const DIVIDER: u16 = 1;
+        let tab_widths: Vec<u16> = titles
             .iter()
-            .map(|t| Line::from(t.to_string()))
+            .map(|t| t.chars().count() as u16 + PADDING)
+            .collect();
+
+        // The `Tabs` widget clips overflow on the right without scrolling, so
+        // find the smallest starting offset that keeps the active tab visible.
+        let mut offset = 0usize;
+        while offset < self.active_tab {
+            let mut used = 0u16;
+            let mut fits = true;
+            for (i, width) in tab_widths.iter().enumerate().take(self.active_tab + 1).skip(offset) {
+                if i > offset {
+                    used = used.saturating_add(DIVIDER);
+                }
+                used = used.saturating_add(*width);
+                if used > area.width {
+                    fits = false;
+                    break;
+                }
+            }
+            if fits {
+                break;
+            }
+            offset += 1;
+        }
+
+        let tab_titles: Vec<Line> = titles[offset..]
+            .iter()
+            .map(|t| Line::from(t.clone()))
             .collect();
         let tabs_widget: Tabs<'_> = Tabs::new(tab_titles)
-            .select(self.active_tab)
+            .select(self.active_tab - offset)
             .padding(" ", " ")
             .divider(" ");
 
