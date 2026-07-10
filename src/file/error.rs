@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn test_io_error_from_conversion() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk failure");
+        let io_err = std::io::Error::other("disk failure");
         let err: FileIOError = io_err.into();
         assert!(err.to_string().contains("disk failure"));
     }

@@ -35,16 +35,14 @@ impl ParquetCtx {
 
         let md = reader.metadata();
 
-        let row_groups = RowGroups::from_file_reader(&reader).map_err(|e| {
-            FileIOError::MetadataError {
+        let row_groups =
+            RowGroups::from_file_reader(&reader).map_err(|e| FileIOError::MetadataError {
                 details: format!("Failed to read row groups: {e}"),
-            }
-        })?;
-
-        let metadata =
-            FileMetadata::from_metadata(md).map_err(|e| FileIOError::MetadataError {
-                details: format!("Failed to read file metadata: {e}"),
             })?;
+
+        let metadata = FileMetadata::from_metadata(md).map_err(|e| FileIOError::MetadataError {
+            details: format!("Failed to read file metadata: {e}"),
+        })?;
 
         let schema = FileSchema::from_metadata(md).map_err(|e| FileIOError::MetadataError {
             details: format!("Failed to parse schema: {e}"),
@@ -156,9 +154,6 @@ mod tests {
             crate::file::parquet_test_data()
         );
         let result = ParquetCtx::from_file(&path);
-        assert!(
-            result.is_err(),
-            "Expected error for corrupt parquet file"
-        );
+        assert!(result.is_err(), "Expected error for corrupt parquet file");
     }
 }
