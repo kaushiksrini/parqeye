@@ -2190,6 +2190,7 @@ dependencies = [
  "polars",
  "ratatui",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
