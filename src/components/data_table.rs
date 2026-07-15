@@ -15,6 +15,37 @@ use crate::file::Renderable;
 const NUM_SPACES_BETWEEN_COLUMNS: u16 = 2;
 const NUM_SPACES_AFTER_LINE_NUMBER: u16 = 2;
 
+/// Number of columns starting at `start` whose widths fit in `available_width`
+/// (at least 1, so an over-wide column still shows, clipped).
+fn columns_fitting(widths: &[u16], start: usize, available_width: u16) -> usize {
+    let mut acc = 0u16;
+    let mut count = 0usize;
+    for &w in widths.iter().skip(start) {
+        if count > 0 && acc.saturating_add(w) > available_width {
+            break;
+        }
+        acc = acc.saturating_add(w);
+        count += 1;
+    }
+    count.max(1)
+}
+
+/// Smallest scroll offset at which the trailing columns fill `available_width`
+/// (i.e. the last column is flush right). Accumulates from the right so the end
+/// is always reachable regardless of column widths.
+fn max_scroll_from_widths(widths: &[u16], available_width: u16) -> usize {
+    let mut acc = 0u16;
+    let mut fit = 0usize;
+    for &w in widths.iter().rev() {
+        if fit > 0 && acc.saturating_add(w) > available_width {
+            break;
+        }
+        acc = acc.saturating_add(w);
+        fit += 1;
+    }
+    widths.len().saturating_sub(fit.max(1))
+}
+
 pub struct DataTable<'a> {
     pub data: &'a ParquetSampleData,
     pub title: String,
@@ -94,6 +125,23 @@ impl<'a> DataTable<'a> {
 
         // Total columns minus visible columns
         self.data.total_columns.saturating_sub(max_visible_columns)
+    }
+
+    /// Rendered width of every column (from the rows in view). Basis for both the
+    /// scroll bound and how many columns are drawn, so they stay in agreement.
+    fn all_column_widths(&self) -> Vec<u16> {
+        let start = self.vertical_scroll.min(self.data.rows.len());
+        self.calculate_column_widths(&self.data.flattened_columns, &self.data.rows[start..])
+    }
+
+    /// Maximum horizontal scroll offset for a render area `area_width` wide,
+    /// sized from actual column widths so the last column is always reachable.
+    pub fn max_horizontal_scroll(&self, area_width: u16) -> usize {
+        let max_row_num = self.data.rows.len().saturating_sub(self.vertical_scroll);
+        let row_num_section_width =
+            (format!("{max_row_num}").len().max(4) as u16) + 2 * NUM_SPACES_AFTER_LINE_NUMBER + 1;
+        let available_width = area_width.saturating_sub(row_num_section_width);
+        max_scroll_from_widths(&self.all_column_widths(), available_width)
     }
 
     fn calculate_column_widths(
@@ -279,12 +327,14 @@ impl<'a> Widget for DataTable<'a> {
         // Calculate available width for data columns
         let available_width = area.width.saturating_sub(row_num_section_width);
 
-        let min_column_width = 12;
-        let max_visible_columns = (available_width / min_column_width).max(1) as usize;
-
-        // Clamp scroll offset to valid range
-        let max_scroll = self.data.total_columns.saturating_sub(max_visible_columns);
+        // Clamp scroll to the actual end (last column flush right), then show as
+        // many columns as truly fit from there. Sizing by real column widths
+        // (not a flat estimate) keeps wide columns from pushing the last ones
+        // off-screen / out of reach.
+        let all_widths = self.all_column_widths();
+        let max_scroll = max_scroll_from_widths(&all_widths, available_width);
         let horizontal_scroll = self.horizontal_scroll.min(max_scroll);
+        let max_visible_columns = columns_fitting(&all_widths, horizontal_scroll, available_width);
 
         // Get visible columns
         let visible_headers: Vec<String> = self
@@ -375,5 +425,52 @@ impl Renderable for ParquetSampleData {
     fn render_content(&self, area: Rect, buf: &mut Buffer) {
         let table_component = DataTable::new(self);
         table_component.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_columns_fitting_counts_what_fits() {
+        let widths = [10, 10, 10, 10];
+        // 10 + 10 = 20 <= 25; a third column would overflow.
+        assert_eq!(columns_fitting(&widths, 0, 25), 2);
+        // Exact fit.
+        assert_eq!(columns_fitting(&widths, 0, 20), 2);
+        // Counting from a non-zero offset.
+        assert_eq!(columns_fitting(&widths, 2, 25), 2);
+    }
+
+    #[test]
+    fn test_columns_fitting_shows_at_least_one() {
+        // A single column wider than the whole area is still shown (clipped),
+        // never zero columns.
+        assert_eq!(columns_fitting(&[40], 0, 10), 1);
+        assert_eq!(columns_fitting(&[40, 40], 0, 10), 1);
+    }
+
+    #[test]
+    fn test_max_scroll_is_zero_when_all_columns_fit() {
+        assert_eq!(max_scroll_from_widths(&[10, 10, 10], 100), 0);
+    }
+
+    #[test]
+    fn test_max_scroll_reaches_the_last_column() {
+        // Five 20-wide columns in 45 cells: two fit, so the last column becomes
+        // flush-right at offset 3. A flat "width / 12" estimate capped this at 2
+        // and left the final columns unreachable.
+        let widths = [20, 20, 20, 20, 20];
+        let max = max_scroll_from_widths(&widths, 45);
+        assert_eq!(max, 3);
+        // At the max offset the trailing columns (including the last) all fit.
+        assert_eq!(max + columns_fitting(&widths, max, 45), widths.len());
+    }
+
+    #[test]
+    fn test_max_scroll_with_a_wide_trailing_column() {
+        // Only the last (over-wide) column fits from the right.
+        assert_eq!(max_scroll_from_widths(&[10, 10, 50], 30), 2);
     }
 }
