@@ -72,7 +72,7 @@ impl FileSchema {
             md.row_groups().iter().for_each(|rg| {
                 let col_chunk = rg.column(col_idx);
                 codecs.insert(format!("{:?}", col_chunk.compression()));
-                encs.extend(col_chunk.encodings().iter().map(|enc| format!("{enc:?}")));
+                encs.extend(col_chunk.encodings().map(|enc| format!("{enc:?}")));
             });
 
             let codec_summary = codecs.into_iter().collect::<Vec<_>>().join(", ");
@@ -353,8 +353,8 @@ fn traverse(
     if node.is_primitive() {
         let repetition = format!("{:?}", node.get_basic_info().repetition());
         let physical = format!("{:?}", node.get_physical_type());
-        let logical = match node.get_basic_info().logical_type() {
-            Some(logical_type) => logical_type_to_string(&logical_type),
+        let logical = match node.get_basic_info().logical_type_ref() {
+            Some(logical_type) => logical_type_to_string(logical_type),
             None => String::new(),
         };
 
@@ -505,68 +505,58 @@ fn decode_value(bytes: &[u8], physical: PhysicalType) -> String {
 
 fn logical_type_to_string(logical_type: &LogicalType) -> String {
     match logical_type {
-        LogicalType::Decimal { scale, precision } => {
-            format!("Decimal({scale},{precision})")
-        }
-        LogicalType::Integer {
-            bit_width,
-            is_signed,
-        } => format!(
-            "Integer({bit_width},{})",
-            if *is_signed { "sign" } else { "unsign" }
+        LogicalType::Decimal(t) => format!("Decimal({},{})", t.scale, t.precision),
+        LogicalType::Integer(t) => format!(
+            "Integer({},{})",
+            t.bit_width,
+            if t.is_signed { "sign" } else { "unsign" }
         ),
-        LogicalType::Time {
-            is_adjusted_to_u_t_c,
-            unit,
-        } => match unit {
-            TimeUnit::MILLIS(_) => format!(
+        LogicalType::Time(t) => match t.unit {
+            TimeUnit::MILLIS => format!(
                 "Time({}, millis)",
-                if *is_adjusted_to_u_t_c {
+                if t.is_adjusted_to_u_t_c {
                     "utc"
                 } else {
                     "local"
                 }
             ),
-            TimeUnit::MICROS(_) => format!(
+            TimeUnit::MICROS => format!(
                 "Time({}, micros)",
-                if *is_adjusted_to_u_t_c {
+                if t.is_adjusted_to_u_t_c {
                     "utc"
                 } else {
                     "local"
                 }
             ),
-            TimeUnit::NANOS(_) => format!(
+            TimeUnit::NANOS => format!(
                 "Time({}, nanos)",
-                if *is_adjusted_to_u_t_c {
+                if t.is_adjusted_to_u_t_c {
                     "utc"
                 } else {
                     "local"
                 }
             ),
         },
-        LogicalType::Timestamp {
-            is_adjusted_to_u_t_c,
-            unit,
-        } => match unit {
-            TimeUnit::MILLIS(_) => format!(
+        LogicalType::Timestamp(t) => match t.unit {
+            TimeUnit::MILLIS => format!(
                 "Timestamp({}, millis)",
-                if *is_adjusted_to_u_t_c {
+                if t.is_adjusted_to_u_t_c {
                     "utc"
                 } else {
                     "local"
                 }
             ),
-            TimeUnit::MICROS(_) => format!(
+            TimeUnit::MICROS => format!(
                 "Timestamp({}, micros)",
-                if *is_adjusted_to_u_t_c {
+                if t.is_adjusted_to_u_t_c {
                     "utc"
                 } else {
                     "local"
                 }
             ),
-            TimeUnit::NANOS(_) => format!(
+            TimeUnit::NANOS => format!(
                 "Timestamp({}, nanos)",
-                if *is_adjusted_to_u_t_c {
+                if t.is_adjusted_to_u_t_c {
                     "utc"
                 } else {
                     "local"
@@ -855,23 +845,14 @@ mod tests {
     #[test]
     fn test_logical_type_to_string() {
         // Test Decimal
-        let decimal = LogicalType::Decimal {
-            scale: 2,
-            precision: 10,
-        };
+        let decimal = LogicalType::decimal(2, 10);
         assert_eq!(logical_type_to_string(&decimal), "Decimal(2,10)");
 
         // Test Integer
-        let integer = LogicalType::Integer {
-            bit_width: 32,
-            is_signed: true,
-        };
+        let integer = LogicalType::integer(32, true);
         assert_eq!(logical_type_to_string(&integer), "Integer(32,sign)");
 
-        let unsigned = LogicalType::Integer {
-            bit_width: 16,
-            is_signed: false,
-        };
+        let unsigned = LogicalType::integer(16, false);
         assert_eq!(logical_type_to_string(&unsigned), "Integer(16,unsign)");
     }
 }

@@ -1,3 +1,4 @@
+pub mod error;
 pub mod metadata;
 pub mod parquet_ctx;
 pub mod row_groups;
