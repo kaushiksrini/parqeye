@@ -1,5 +1,8 @@
 use crate::file::utils::human_readable_bytes;
-use crate::file::{row_groups::RowGroupColumnMetadata, utils::commas};
+use crate::file::{
+    row_groups::{RowGroupColumnMetadata, RowGroupPageInfo},
+    utils::commas,
+};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Position, Rect},
@@ -12,11 +15,15 @@ use ratatui::{
 /// Component to display column-level metadata for a selected row group
 pub struct RowGroupColumnMetadataComponent<'a> {
     column_metadata: &'a RowGroupColumnMetadata,
+    pages: &'a RowGroupPageInfo,
 }
 
 impl<'a> RowGroupColumnMetadataComponent<'a> {
-    pub fn new(column_metadata: &'a RowGroupColumnMetadata) -> Self {
-        Self { column_metadata }
+    pub fn new(column_metadata: &'a RowGroupColumnMetadata, pages: &'a RowGroupPageInfo) -> Self {
+        Self {
+            column_metadata,
+            pages,
+        }
     }
 }
 
@@ -241,7 +248,6 @@ impl<'a> RowGroupColumnMetadataComponent<'a> {
 
         // Create rows from page info
         let rows: Vec<Row> = self
-            .column_metadata
             .pages
             .page_infos
             .iter()
