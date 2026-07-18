@@ -10,8 +10,8 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }         # for CLI parsing
-parquet = { version = "54.2.1", features = ["cli","async","json","arrow"] }  # core Parquet APIs
-arrow = "54.2.1"                                        # Arrow arrays and data types
+parquet = { version = "59.0.0", features = ["cli","async","json","arrow"] }  # core Parquet APIs
+arrow = "59.0.0"                                        # Arrow arrays and data types
 parquet-format = "4.0.0"                                # Thrift structs
 ratatui = "0.29.0"
 crossterm = "0.29.0"
