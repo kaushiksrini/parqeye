@@ -10,7 +10,7 @@ use ratatui::{
 use crate::app::AppRenderView;
 use crate::components::{
     DataTable, FileSchemaTable, RowGroupColumnMetadataComponent, RowGroupMetadata,
-    RowGroupProgressBar, SchemaTreeComponent, ScrollbarComponent,
+    RowGroupProgressBar, SchemaTreeComponent, ScrollbarComponent, WarningView,
 };
 use crate::file::Renderable;
 
@@ -248,11 +248,19 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_visualize_view(&self, area: Rect, buf: &mut Buffer) {
-        DataTable::new(&self.0.parquet_ctx.sample_data)
-            .with_horizontal_scroll(self.0.state().horizontal_offset())
-            .with_vertical_scroll(self.0.state().data_vertical_scroll())
-            .with_selected_row(Some(self.0.state().vertical_offset()))
-            .render(area, buf)
+        match &self.0.parquet_ctx.sample_data {
+            Ok(sample_data) => DataTable::new(sample_data)
+                .with_horizontal_scroll(self.0.state().horizontal_offset())
+                .with_vertical_scroll(self.0.state().data_vertical_scroll())
+                .with_selected_row(Some(self.0.state().vertical_offset()))
+                .render(area, buf),
+            Err(message) => WarningView::new("Unable to read the data in this file.")
+                .with_note(
+                    "The file's metadata, schema, and row groups are still available in the other tabs.",
+                )
+                .with_detail(message.clone())
+                .render(area, buf),
+        }
     }
 }
 

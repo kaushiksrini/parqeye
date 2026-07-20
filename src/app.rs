@@ -173,7 +173,11 @@ impl AppState {
 
 impl<'a> App<'a> {
     pub fn new(file_info: &'a ParquetCtx) -> Self {
-        let sample_data_rows = file_info.sample_data.total_rows;
+        let sample_data_rows = file_info
+            .sample_data
+            .as_ref()
+            .map(|data| data.total_rows)
+            .unwrap_or(0);
 
         let tab_manager = TabManager::new(
             file_info.schema.column_size(),
@@ -204,12 +208,14 @@ impl<'a> App<'a> {
             // left phantom offset, causing "empty" presses when scrolling back).
             // The data table spans the full terminal width, so it is the width we
             // pass here. Other tabs keep their own bounds (unbounded here).
-            let max_horizontal_offset = if self.tabs.active_tab().to_string() == "Visualize" {
-                crate::components::DataTable::new(&self.parquet_ctx.sample_data)
+            let max_horizontal_offset = match (
+                self.tabs.active_tab().to_string().as_str(),
+                &self.parquet_ctx.sample_data,
+            ) {
+                ("Visualize", Ok(sample_data)) => crate::components::DataTable::new(sample_data)
                     .with_vertical_scroll(self.state.data_vertical_scroll())
-                    .max_horizontal_scroll(terminal_size.width)
-            } else {
-                usize::MAX
+                    .max_horizontal_scroll(terminal_size.width),
+                _ => usize::MAX,
             };
             self.state.set_max_horizontal_offset(max_horizontal_offset);
 

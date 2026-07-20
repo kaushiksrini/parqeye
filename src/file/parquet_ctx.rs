@@ -12,7 +12,11 @@ pub struct ParquetCtx {
     pub metadata: FileMetadata,
     pub row_groups: RowGroups,
     pub schema: FileSchema,
-    pub sample_data: ParquetSampleData,
+    /// Preview data for the Visualize tab. This is `Err` (rather than fatal) when
+    /// the reader can't decode the file's values — e.g. a type the polars-based
+    /// reader doesn't support — so the rest of the file stays inspectable and the
+    /// Visualize tab shows a warning instead of the app crashing.
+    pub sample_data: Result<ParquetSampleData, String>,
 }
 
 impl ParquetCtx {
@@ -48,11 +52,7 @@ impl ParquetCtx {
             details: format!("Failed to parse schema: {e}"),
         })?;
 
-        let sample_data = ParquetSampleData::read_sample_data(file_path).map_err(|e| {
-            FileIOError::SampleDataError {
-                details: e.to_string(),
-            }
-        })?;
+        let sample_data = Self::load_sample_data(file_path);
 
         Ok(ParquetCtx {
             file_path: file_path.to_string(),
@@ -61,6 +61,39 @@ impl ParquetCtx {
             schema,
             sample_data,
         })
+    }
+
+    /// Read the preview data without ever taking the whole app down. A file may
+    /// have perfectly valid metadata/schema yet contain values the reader can't
+    /// decode; in that case the reader can either return an error or panic deep
+    /// inside a dependency. Both are caught here and surfaced as a message so the
+    /// Visualize tab can warn while the other tabs keep working.
+    fn load_sample_data(file_path: &str) -> Result<ParquetSampleData, String> {
+        // Silence the default panic hook for the duration of the read so a caught
+        // panic doesn't dump a backtrace onto the terminal. This runs at startup,
+        // before the TUI is initialized, so swapping the global hook is safe.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ParquetSampleData::read_sample_data(file_path)
+        }));
+        std::panic::set_hook(previous_hook);
+
+        match outcome {
+            Ok(Ok(data)) => Ok(data),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(panic) => Err(Self::panic_message(panic)),
+        }
+    }
+
+    fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(msg) = panic.downcast_ref::<&str>() {
+            msg.to_string()
+        } else if let Some(msg) = panic.downcast_ref::<String>() {
+            msg.clone()
+        } else {
+            "the parquet reader panicked while reading the data".to_string()
+        }
     }
 
     pub fn column_size(&self) -> usize {
@@ -75,6 +108,27 @@ mod tests {
     fn test_data_path(filename: &str) -> String {
         format!("{}/{}", crate::file::parquet_test_data(), filename)
     }
+
+    /// Path to a file in the sibling `parquet-testing/bad_data` submodule.
+    /// `parquet_test_data()` points at `parquet-testing/data`, so `../bad_data`
+    /// hops over to the malformed fixtures.
+    fn bad_data_path(filename: &str) -> String {
+        format!("{}/../bad_data/{}", crate::file::parquet_test_data(), filename)
+    }
+
+    /// Malformed files (from `parquet-testing/bad_data`) whose footer metadata is
+    /// intact but whose data pages are corrupt: the reader can open them and read
+    /// schema/row-group/metadata, but decoding the values fails. These exercise
+    /// the graceful path where the app still loads and the Visualize tab warns
+    /// instead of crashing.
+    const BAD_DATA_FILES: &[&str] = &[
+        "ARROW-RS-GH-6229-DICTHEADER.parquet",
+        "ARROW-RS-GH-6229-LEVELS.parquet",
+        "ARROW-GH-41321.parquet",
+        "ARROW-GH-41317.parquet",
+        "ARROW-GH-43605.parquet",
+        "ARROW-GH-45185.parquet",
+    ];
 
     #[test]
     fn test_file_not_found() {
@@ -149,11 +203,28 @@ mod tests {
 
     #[test]
     fn test_corrupt_parquet_from_bad_data() {
-        let path = format!(
-            "{}/../../parquet-testing/bad_data/PARQUET-1481.parquet",
-            crate::file::parquet_test_data()
-        );
+        let path = bad_data_path("PARQUET-1481.parquet");
         let result = ParquetCtx::from_file(&path);
         assert!(result.is_err(), "Expected error for corrupt parquet file");
+    }
+
+    /// Files with corrupt data (but readable metadata) must never load their
+    /// sample data or take the app down. `from_file` should return without
+    /// panicking, and either fail outright or open with `sample_data` reported as
+    /// an error — which is what drives the warning on the Visualize tab.
+    #[test]
+    fn test_bad_data_files_do_not_load_sample_data() {
+        for filename in BAD_DATA_FILES {
+            let path = bad_data_path(filename);
+            match ParquetCtx::from_file(&path) {
+                Ok(ctx) => assert!(
+                    ctx.sample_data.is_err(),
+                    "expected sample data to fail to load for {filename}, but it loaded"
+                ),
+                // Failing earlier (e.g. a corrupt footer) is still a clean,
+                // non-crashing failure.
+                Err(_) => {}
+            }
+        }
     }
 }

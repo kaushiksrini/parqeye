@@ -2,6 +2,7 @@ pub mod data_table;
 pub mod row_group;
 pub mod schema;
 pub mod scrollbar;
+pub mod warning;
 
 pub use data_table::DataTable;
 pub use row_group::RowGroupColumnMetadataComponent;
@@ -10,3 +11,4 @@ pub use row_group::RowGroupProgressBar;
 pub use schema::FileSchemaTable;
 pub use schema::SchemaTreeComponent;
 pub use scrollbar::ScrollbarComponent;
+pub use warning::WarningView;
