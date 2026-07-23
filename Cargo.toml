@@ -5,6 +5,7 @@ version = "0.0.2"
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/kaushiksrini/parqeye"
+homepage = "https://github.com/kaushiksrini/parqeye"
 keywords = ["parquet", "parq", "visualizer", "schema", "tui"]
 edition = "2024"
 
