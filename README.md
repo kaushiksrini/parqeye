@@ -56,6 +56,14 @@ If you have Homebrew, you can install using:
 brew install parqeye
 ```
 
+### Windows
+
+`parqeye` is available on [winget](https://learn.microsoft.com/en-gb/windows/package-manager/) for Windows. You can install using:
+
+```powershell
+winget install --id kaushiksrini.parqeye
+```
+
 # License
 
 This package is released under the [MIT License](./LICENSE).
