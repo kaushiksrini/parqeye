@@ -2,8 +2,8 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
-use std::rc::Rc;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use crate::file::error::FileIOError;
 use crate::file::metadata::FileMetadata;
