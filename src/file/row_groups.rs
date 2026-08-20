@@ -272,3 +272,69 @@ impl RowGroupColumnStats {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_data_path(filename: &str) -> String {
+        format!("{}/{}", crate::file::parquet_test_data(), filename)
+    }
+
+    fn open_reader(filename: &str) -> SerializedFileReader<std::fs::File> {
+        let path = test_data_path(filename);
+        let file = std::fs::File::open(&path).unwrap();
+        SerializedFileReader::new(file).unwrap()
+    }
+
+    #[test]
+    fn test_make_page_info_reads_dictionary_and_data_pages() {
+        let reader = open_reader("alltypes_plain.parquet");
+        let mut page_reader = reader
+            .get_row_group(0)
+            .unwrap()
+            .get_column_page_reader(0)
+            .unwrap();
+
+        let pages = make_page_info(&mut page_reader);
+
+        assert_eq!(pages.page_infos.len(), 2);
+        assert_eq!(pages.page_infos[0].page_type, "Dictionary Page");
+        assert_eq!(pages.page_infos[1].page_type, "Data Page");
+        // The dictionary/plain files have a single row group of 8 rows.
+        assert_eq!(pages.page_infos[1].rows, 8);
+    }
+
+    #[test]
+    fn test_make_page_info_no_dictionary_page_for_bool_column() {
+        let reader = open_reader("alltypes_plain.parquet");
+        // Column 1 is the boolean column, which parquet never dictionary-encodes.
+        let mut page_reader = reader
+            .get_row_group(0)
+            .unwrap()
+            .get_column_page_reader(1)
+            .unwrap();
+
+        let pages = make_page_info(&mut page_reader);
+
+        assert_eq!(pages.page_infos.len(), 1);
+        assert_eq!(pages.page_infos[0].page_type, "Data Page");
+    }
+
+    #[test]
+    fn test_row_group_page_info_default_is_empty() {
+        let pages = RowGroupPageInfo::default();
+        assert!(pages.page_infos.is_empty());
+    }
+
+    #[test]
+    fn test_row_group_column_metadata_from_file_reader_succeeds_without_reading_pages() {
+        // Regression test for the lazy page loading change: building column metadata
+        // must not require (or fail because of) page enumeration.
+        let reader = open_reader("alltypes_plain.parquet");
+        let metadata = RowGroupColumnMetadata::from_file_reader(&reader, 0, 0).unwrap();
+
+        assert_eq!(metadata.column_path, "\"id\"");
+        assert!(metadata.has_stats.has_dictionary_page);
+    }
+}

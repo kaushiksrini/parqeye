@@ -194,4 +194,67 @@ mod tests {
         let result = ParquetCtx::from_file(&path);
         assert!(result.is_err(), "Expected error for corrupt parquet file");
     }
+
+    #[test]
+    fn test_page_info_reads_pages_for_column() {
+        let path = test_data_path("alltypes_plain.parquet");
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+
+        let pages = ctx.page_info(0, 0);
+
+        assert_eq!(pages.page_infos.len(), 2);
+        assert_eq!(pages.page_infos[0].page_type, "Dictionary Page");
+        assert_eq!(pages.page_infos[1].page_type, "Data Page");
+    }
+
+    #[test]
+    fn test_page_info_differs_per_column() {
+        let path = test_data_path("alltypes_plain.parquet");
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+
+        // Column 1 (bool) has no dictionary page, unlike column 0.
+        let pages = ctx.page_info(0, 1);
+
+        assert_eq!(pages.page_infos.len(), 1);
+        assert_eq!(pages.page_infos[0].page_type, "Data Page");
+    }
+
+    #[test]
+    fn test_page_info_handles_many_pages() {
+        let path = test_data_path("alltypes_tiny_pages.parquet");
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+
+        let pages = ctx.page_info(0, 0);
+
+        assert_eq!(pages.page_infos.len(), 325);
+    }
+
+    #[test]
+    fn test_page_info_caches_repeated_lookups() {
+        let path = test_data_path("alltypes_plain.parquet");
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+
+        let first = ctx.page_info(0, 0);
+        let second = ctx.page_info(0, 0);
+
+        assert!(
+            Rc::ptr_eq(&first, &second),
+            "expected cached page info to be reused rather than re-read"
+        );
+        assert_eq!(ctx.page_cache.borrow().len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_page_info_out_of_range_row_group_panics() {
+        // `unwrap_or_default()` in `page_info` only catches `Err`s from
+        // `read_page_info`, but the underlying `parquet` crate indexes into its
+        // row group vector directly and panics on an out-of-range index rather
+        // than returning `Err`. Documenting this so a caller doesn't assume
+        // `page_info` is panic-safe for arbitrary indices.
+        let path = test_data_path("alltypes_plain.parquet");
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+
+        ctx.page_info(99, 99);
+    }
 }
