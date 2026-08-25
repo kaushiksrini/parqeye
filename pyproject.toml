@@ -1,0 +1,27 @@
+[project]
+name = "parqeye"
+description = "Parquet viewer for the command line"
+readme = {file = "README.md", content-type = "text/markdown"}
+license-files = ["LICENSE"]
+keywords = ["parquet", "cli", "tui", "viewer", "schema"]
+classifiers = [
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/kaushiksrini/parqeye"
+Repository = "https://github.com/kaushiksrini/parqeye"
+Changelog = "https://github.com/kaushiksrini/parqeye/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["maturin>=1.12,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "Cargo.toml"
+module-name = "parqeye"
+locked = true
