@@ -28,16 +28,12 @@ parqeye <path-to-parquet-file>
 
 # Installation
 
-## Direct Download
+## Python
 
-You can download the latest release from the [Releases](https://github.com/kaushiksrini/parqeye/releases) page.
-
-## Build from Source
-
-You can build from source by downloading the repository and running the following command:
+You can run `parqeye` using `uvx`:
 
 ```
-cargo build --release
+uvx parqeye <path-to-parquet-file>
 ```
 
 ## Cargo
@@ -56,13 +52,25 @@ If you have Homebrew, you can install using:
 brew install parqeye
 ```
 
-### Windows
+## Windows
 
 `parqeye` is available on [winget](https://learn.microsoft.com/en-gb/windows/package-manager/) for Windows. You can install using:
 
 ```powershell
 winget install --id kaushiksrini.parqeye
 ```
+
+## Build from Source
+
+You can build from source by downloading the repository and running the following command:
+
+```
+cargo build --release
+```
+
+## Direct Download
+
+You can download the latest release from the [Releases](https://github.com/kaushiksrini/parqeye/releases) page.
 
 # License
 
