@@ -8,6 +8,7 @@ use parquet::file::statistics::Statistics;
 use itertools::Itertools;
 use std::iter::Iterator;
 
+#[derive(Default)]
 pub struct RowGroupPageInfo {
     pub page_infos: Vec<PageInfo>,
 }
@@ -41,7 +42,6 @@ pub struct RowGroupColumnMetadata {
     pub total_compressed_size: i64,
     pub total_uncompressed_size: i64,
     pub compression_type: String,
-    pub pages: RowGroupPageInfo,
 }
 
 pub struct RowGroupAvgMedianStats {
@@ -173,11 +173,6 @@ impl RowGroupColumnMetadata {
         let rg_md = reader.metadata().row_group(rg_idx);
         let column_chunk: &ColumnChunkMetaData = rg_md.column(col_idx);
 
-        let mut page_reader = reader
-            .get_row_group(rg_idx)?
-            .get_column_page_reader(col_idx)?;
-        let pages = Self::make_page_info(&mut page_reader)?;
-
         let statistics = RowGroupColumnStats::new(column_chunk.statistics());
 
         Ok(RowGroupColumnMetadata {
@@ -194,24 +189,22 @@ impl RowGroupColumnMetadata {
             total_compressed_size: column_chunk.compressed_size(),
             total_uncompressed_size: column_chunk.uncompressed_size(),
             compression_type: column_chunk.compression().to_string(),
-            pages,
         })
     }
+}
 
-    fn make_page_info(
-        page_reader: &mut Box<dyn PageReader>,
-    ) -> Result<RowGroupPageInfo, Box<dyn std::error::Error>> {
-        let mut page_info = Vec::new();
-        while let Ok(page) = page_reader.get_next_page() {
-            if let Some(page) = page {
-                page_info.push(PageInfo::from(&page));
-            } else {
-                break;
-            }
-        }
-        Ok(RowGroupPageInfo {
-            page_infos: page_info,
-        })
+/// Enumerate the pages of a single column chunk.
+///
+/// This reads (and decompresses) each page's data buffer, so it is intentionally
+/// called lazily — only for the row group / column the user is currently viewing —
+/// rather than eagerly for the whole file. See `ParquetCtx::page_info`.
+pub(crate) fn make_page_info(page_reader: &mut Box<dyn PageReader>) -> RowGroupPageInfo {
+    let mut page_info = Vec::new();
+    while let Ok(Some(page)) = page_reader.get_next_page() {
+        page_info.push(PageInfo::from(&page));
+    }
+    RowGroupPageInfo {
+        page_infos: page_info,
     }
 }
 
@@ -277,5 +270,71 @@ impl RowGroupColumnStats {
             null_count: stats.null_count_opt(),
             distinct_count: stats.distinct_count_opt(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_data_path(filename: &str) -> String {
+        format!("{}/{}", crate::file::parquet_test_data(), filename)
+    }
+
+    fn open_reader(filename: &str) -> SerializedFileReader<std::fs::File> {
+        let path = test_data_path(filename);
+        let file = std::fs::File::open(&path).unwrap();
+        SerializedFileReader::new(file).unwrap()
+    }
+
+    #[test]
+    fn test_make_page_info_reads_dictionary_and_data_pages() {
+        let reader = open_reader("alltypes_plain.parquet");
+        let mut page_reader = reader
+            .get_row_group(0)
+            .unwrap()
+            .get_column_page_reader(0)
+            .unwrap();
+
+        let pages = make_page_info(&mut page_reader);
+
+        assert_eq!(pages.page_infos.len(), 2);
+        assert_eq!(pages.page_infos[0].page_type, "Dictionary Page");
+        assert_eq!(pages.page_infos[1].page_type, "Data Page");
+        // The dictionary/plain files have a single row group of 8 rows.
+        assert_eq!(pages.page_infos[1].rows, 8);
+    }
+
+    #[test]
+    fn test_make_page_info_no_dictionary_page_for_bool_column() {
+        let reader = open_reader("alltypes_plain.parquet");
+        // Column 1 is the boolean column, which parquet never dictionary-encodes.
+        let mut page_reader = reader
+            .get_row_group(0)
+            .unwrap()
+            .get_column_page_reader(1)
+            .unwrap();
+
+        let pages = make_page_info(&mut page_reader);
+
+        assert_eq!(pages.page_infos.len(), 1);
+        assert_eq!(pages.page_infos[0].page_type, "Data Page");
+    }
+
+    #[test]
+    fn test_row_group_page_info_default_is_empty() {
+        let pages = RowGroupPageInfo::default();
+        assert!(pages.page_infos.is_empty());
+    }
+
+    #[test]
+    fn test_row_group_column_metadata_from_file_reader_succeeds_without_reading_pages() {
+        // Regression test for the lazy page loading change: building column metadata
+        // must not require (or fail because of) page enumeration.
+        let reader = open_reader("alltypes_plain.parquet");
+        let metadata = RowGroupColumnMetadata::from_file_reader(&reader, 0, 0).unwrap();
+
+        assert_eq!(metadata.column_path, "\"id\"");
+        assert!(metadata.has_stats.has_dictionary_page);
     }
 }
