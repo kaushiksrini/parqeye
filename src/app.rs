@@ -199,6 +199,14 @@ impl<'a> App<'a> {
             let visible_data_rows = (terminal_size.height.saturating_sub(7) as usize).max(1);
             self.state.set_visible_data_rows(visible_data_rows);
 
+            // Lazily (re)load the row window backing the Visualize table so only a
+            // bounded slice of a large file is ever held in memory.
+            if self.tabs.active_tab().to_string() == "Visualize" {
+                self.parquet_ctx
+                    .sample_data
+                    .ensure_loaded(self.state.data_vertical_scroll(), visible_data_rows);
+            }
+
             // Bound horizontal column scrolling on the Visualize tab to what
             // actually fits, so it can't overshoot the last visible column (which
             // left phantom offset, causing "empty" presses when scrolling back).
