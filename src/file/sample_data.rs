@@ -53,7 +53,7 @@ impl ParquetSampleData {
             Self::load(file_path, 0, first_len)?
         } else {
             // Empty file: take column names from the lazy schema, no data read.
-            let mut lf = LazyFrame::scan_parquet(PlPath::new(file_path), Default::default())?;
+            let mut lf = LazyFrame::scan_parquet(PlRefPath::new(file_path), Default::default())?;
             let schema = lf.collect_schema()?;
             let names = schema.iter_names().map(|s| s.to_string()).collect();
             (Vec::new(), names)
@@ -78,7 +78,7 @@ impl ParquetSampleData {
         offset: usize,
         len: usize,
     ) -> Result<LoadedRows, Box<dyn std::error::Error>> {
-        let df = LazyFrame::scan_parquet(PlPath::new(file_path), Default::default())?
+        let df = LazyFrame::scan_parquet(PlRefPath::new(file_path), Default::default())?
             .slice(offset as i64, len as IdxSize)
             .collect()?;
 
@@ -94,7 +94,7 @@ impl ParquetSampleData {
         let mut rows = Vec::with_capacity(df.height());
         for row_idx in 0..df.height() {
             let mut row = Vec::with_capacity(columns.len());
-            for col in df.get_columns() {
+            for col in df.columns() {
                 let series = col.as_materialized_series();
                 row.push(Self::get_value_as_string(series, row_idx));
             }
