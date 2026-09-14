@@ -219,15 +219,15 @@ impl<'a> App<'a> {
                     .ensure_loaded(self.state.data_vertical_scroll(), visible_data_rows);
             }
 
-            // Bound horizontal column scrolling on the Visualize tab to what
-            // actually fits, so it can't overshoot the last visible column (which
-            // left phantom offset, causing "empty" presses when scrolling back).
-            // The data table spans the full terminal width, so it is the width we
-            // pass here. Other tabs keep their own bounds (unbounded here).
+            // Bound visualize horizontal scrolling to what fits.
+            // terminal minus the tab header (3 lines) and footer (1 line).
             let max_horizontal_offset = if self.tabs.active_tab().to_string() == "Visualize" {
                 crate::components::DataTable::new(&self.parquet_ctx.sample_data)
                     .with_vertical_scroll(self.state.data_vertical_scroll())
-                    .max_horizontal_scroll(terminal_size.width)
+                    .max_horizontal_scroll(
+                        terminal_size.width,
+                        terminal_size.height.saturating_sub(4),
+                    )
             } else {
                 usize::MAX
             };
