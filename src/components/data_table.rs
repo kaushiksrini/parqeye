@@ -11,9 +11,22 @@ use ratatui::{
 use std::cmp::min;
 
 use crate::file::Renderable;
+use crate::file::utils::commas;
 
 const NUM_SPACES_BETWEEN_COLUMNS: u16 = 2;
 const NUM_SPACES_AFTER_LINE_NUMBER: u16 = 2;
+const MIN_ROW_NUM_DIGITS: u16 = 4;
+/// Header text line plus the separator line above the first data row.
+const HEADER_HEIGHT: u16 = 2;
+
+/// Digits needed for the largest row number currently in view.
+fn row_num_digits(vertical_scroll: usize, rows_height: u16, total_rows: usize) -> u16 {
+    let last_row_num = vertical_scroll
+        .saturating_add(rows_height as usize)
+        .min(total_rows)
+        .max(1);
+    (last_row_num.ilog10() as u16 + 1).max(MIN_ROW_NUM_DIGITS)
+}
 
 /// Number of columns starting at `start` whose widths fit in `available_width`
 /// (at least 1, so an over-wide column still shows, clipped).
@@ -62,7 +75,7 @@ impl<'a> DataTable<'a> {
     pub fn new(data: &'a ParquetSampleData) -> Self {
         Self {
             data,
-            title: "Data Preview (up to 100 rows)".to_string(),
+            title: format!("Data Preview ({} rows)", commas(data.total_rows as u64)),
             title_color: Color::Cyan,
             border_style: border::ROUNDED,
             horizontal_scroll: 0,
@@ -130,16 +143,28 @@ impl<'a> DataTable<'a> {
     /// Rendered width of every column (from the rows in view). Basis for both the
     /// scroll bound and how many columns are drawn, so they stay in agreement.
     fn all_column_widths(&self) -> Vec<u16> {
-        let start = self.vertical_scroll.min(self.data.rows.len());
-        self.calculate_column_widths(&self.data.flattened_columns, &self.data.rows[start..])
+        let win = self.data.loaded();
+        let start = self
+            .vertical_scroll
+            .saturating_sub(win.start)
+            .min(win.rows.len());
+        self.calculate_column_widths(&self.data.flattened_columns, &win.rows[start..])
     }
 
-    /// Maximum horizontal scroll offset for a render area `area_width` wide,
-    /// sized from actual column widths so the last column is always reachable.
-    pub fn max_horizontal_scroll(&self, area_width: u16) -> usize {
-        let max_row_num = self.data.rows.len().saturating_sub(self.vertical_scroll);
+    /// Digits in the row number gutter for a render area `area_height` tall.
+    fn row_num_digits(&self, area_height: u16) -> u16 {
+        row_num_digits(
+            self.vertical_scroll,
+            area_height.saturating_sub(HEADER_HEIGHT),
+            self.data.total_rows,
+        )
+    }
+
+    /// Maximum horizontal scroll offset for a render area; the last column is
+    /// always reachable.
+    pub fn max_horizontal_scroll(&self, area_width: u16, area_height: u16) -> usize {
         let row_num_section_width =
-            (format!("{max_row_num}").len().max(4) as u16) + 2 * NUM_SPACES_AFTER_LINE_NUMBER + 1;
+            self.row_num_digits(area_height) + 2 * NUM_SPACES_AFTER_LINE_NUMBER + 1;
         let available_width = area_width.saturating_sub(row_num_section_width);
         max_scroll_from_widths(&self.all_column_widths(), available_width)
     }
@@ -318,9 +343,10 @@ impl<'a> Widget for DataTable<'a> {
             return;
         }
 
+        let win = self.data.loaded();
+
         // Calculate row number section width
-        let max_row_num = self.data.rows.len().saturating_sub(self.vertical_scroll);
-        let max_row_num_length = format!("{}", max_row_num).len().max(4) as u16;
+        let max_row_num_length = self.row_num_digits(area.height);
         let row_num_section_width = max_row_num_length + 2 * NUM_SPACES_AFTER_LINE_NUMBER + 1;
         let x_row_separator = max_row_num_length + NUM_SPACES_AFTER_LINE_NUMBER + 1;
 
@@ -346,12 +372,13 @@ impl<'a> Widget for DataTable<'a> {
             .cloned()
             .collect();
 
-        // Get visible data for each row (apply vertical scroll)
-        let visible_rows: Vec<Vec<String>> = self
-            .data
+        // Get visible data for each row (apply vertical scroll). Rows live in a
+        // bounded window; index into it relative to the window start.
+        let row_skip = self.vertical_scroll.saturating_sub(win.start);
+        let visible_rows: Vec<Vec<String>> = win
             .rows
             .iter()
-            .skip(self.vertical_scroll)
+            .skip(row_skip)
             .map(|row| {
                 row.iter()
                     .skip(horizontal_scroll)
@@ -364,17 +391,16 @@ impl<'a> Widget for DataTable<'a> {
         // Calculate column widths
         let column_widths = self.calculate_column_widths(&visible_headers, &visible_rows);
 
-        // Header area: 2 lines (header text + separator)
-        let header_height = 2;
+        // Header area: header text + separator
         let y_header = area.y;
-        let y_first_record = area.y + header_height;
+        let y_first_record = area.y + HEADER_HEIGHT;
 
         // Row area: including row numbers and row content
         let rows_area = Rect::new(
             area.x,
             y_first_record,
             area.width,
-            area.height.saturating_sub(header_height),
+            area.height.saturating_sub(HEADER_HEIGHT),
         );
 
         // Render row numbers
@@ -472,5 +498,30 @@ mod tests {
     fn test_max_scroll_with_a_wide_trailing_column() {
         // Only the last (over-wide) column fits from the right.
         assert_eq!(max_scroll_from_widths(&[10, 10, 50], 30), 2);
+    }
+
+    #[test]
+    fn test_row_num_digits_has_a_minimum() {
+        assert_eq!(row_num_digits(0, 40, 0), 4);
+        assert_eq!(row_num_digits(0, 40, 7), 4);
+        // Top of a huge file: only rows 1..=40 are on screen.
+        assert_eq!(row_num_digits(0, 40, 60_000_000), 4);
+    }
+
+    #[test]
+    fn test_row_num_digits_follows_the_last_row_in_view() {
+        // Rows 9,961..=10,000 are on screen: 10,000 needs 5 digits.
+        assert_eq!(row_num_digits(9_960, 40, 60_000_000), 5);
+        // One row up, the last visible row is 9,999.
+        assert_eq!(row_num_digits(9_959, 40, 60_000_000), 4);
+        assert_eq!(row_num_digits(30_000_000, 40, 60_000_000), 8);
+    }
+
+    #[test]
+    fn test_row_num_digits_is_capped_by_total_rows() {
+        // Bottom of the file: the view extends past the last row, which is 99,999.
+        assert_eq!(row_num_digits(99_990, 40, 99_999), 5);
+        assert_eq!(row_num_digits(59_999_960, 40, 60_000_000), 8);
+        assert_eq!(row_num_digits(999_999_990, 40, 1_000_000_000), 10);
     }
 }
