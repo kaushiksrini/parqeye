@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Incorrect Min/Max aggregation in the Schema tab ([#44](https://github.com/kaushiksrini/parqeye/pull/44))
 - Column file offset and distinct count now show `N/A` when not set in the file metadata ([#46](https://github.com/kaushiksrini/parqeye/pull/46))
 - PyPI workflow builds for Linux `manylinux_2_28` ([#41](https://github.com/kaushiksrini/parqeye/pull/41))
+- add `dtype-extension` to support extension types and handle panics with the polars crate ([#45](https://github.com/kaushiksrini/parqeye/pull/45))
 
 ### Changed
 
