@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    prelude::Color,
+    prelude::{Color, Position},
     style::{Style, Stylize},
     text::Line,
     widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap},
@@ -19,7 +19,22 @@ pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
     'b: 'a,
 {
-    frame.render_widget(AppWidget(app), frame.area());
+    let area = frame.area();
+    frame.render_widget(AppWidget(app), area);
+
+    if area.width > 0
+        && area.height > 0
+        && let Some(prompt) = app.state().visualize().prompt()
+    {
+        let buffer_cursor_width = prompt.buffer[..prompt.cursor].chars().count() as u16;
+        // The prompt prefix precedes the buffer at the start of the footer.
+        let cursor_x = area
+            .x
+            .saturating_add(1)
+            .saturating_add(buffer_cursor_width)
+            .min(area.right().saturating_sub(1));
+        frame.set_cursor_position(Position::new(cursor_x, area.bottom().saturating_sub(1)));
+    }
 }
 
 struct AppWidget<'a>(&'a AppRenderView<'a>);
@@ -150,11 +165,22 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_footer_view(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(prompt) = self.0.state().visualize().prompt() {
+            let mut spans = vec![
+                prompt.kind.prefix().to_string().green(),
+                prompt.buffer.clone().into(),
+            ];
+            if let Some(error) = &prompt.error {
+                spans.extend(["  ".into(), error.clone().red()]);
+            }
+            Line::from(spans).render(area, buf);
+            return;
+        }
+
         let title_width = self.0.title.len() as u16;
         let [title_area, footer_area] =
             Layout::horizontal([Constraint::Length(title_width), Constraint::Fill(1)]).areas(area);
         self.0.title.bold().fg(Color::Green).render(title_area, buf);
-
         self.0.tabs().render_instructions(footer_area, buf);
     }
 
