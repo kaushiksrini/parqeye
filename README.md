@@ -1,9 +1,20 @@
 # parqeye
 
 [![CI][actions-badge]][actions-url]
+[![crates.io][crates-badge]][crates-url]
+[![PyPI][pypi-badge]][pypi-url]
+[![Homebrew][homebrew-badge]][homebrew-url]
+[![License][license-badge]](./LICENSE)
 
 [actions-badge]: https://github.com/kaushiksrini/parqeye/actions/workflows/ci.yaml/badge.svg
 [actions-url]: https://github.com/kaushiksrini/parqeye/actions/workflows/ci.yaml
+[crates-badge]: https://img.shields.io/crates/v/parqeye.svg?logo=rust
+[crates-url]: https://crates.io/crates/parqeye
+[pypi-badge]: https://img.shields.io/pypi/v/parqeye.svg?logo=pypi&logoColor=white
+[pypi-url]: https://pypi.org/project/parqeye/
+[homebrew-badge]: https://img.shields.io/homebrew/v/parqeye.svg?logo=homebrew&logoColor=white
+[homebrew-url]: https://formulae.brew.sh/formula/parqeye
+[license-badge]: https://img.shields.io/crates/l/parqeye.svg
 
 `parqeye` lets you _peek inside_ your Parquet files. Instantly inspect their contents, schema, and metadata — right from your terminal.
 
