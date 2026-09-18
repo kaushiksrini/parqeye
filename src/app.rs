@@ -318,6 +318,27 @@ mod tests {
     }
 
     #[test]
+    fn test_page_navigation_moves_by_visible_rows_and_clamps() {
+        let mut state = AppState::new();
+
+        state.page_down(5, 12);
+        assert_eq!(state.vertical_offset(), 5);
+        assert_eq!(state.data_vertical_scroll(), 1);
+
+        state.page_down(5, 12);
+        assert_eq!(state.vertical_offset(), 10);
+        assert_eq!(state.data_vertical_scroll(), 6);
+
+        state.page_down(5, 12);
+        assert_eq!(state.vertical_offset(), 11);
+        assert_eq!(state.data_vertical_scroll(), 7);
+
+        state.page_up(5, 12);
+        assert_eq!(state.vertical_offset(), 6);
+        assert_eq!(state.data_vertical_scroll(), 6);
+    }
+
+    #[test]
     fn test_shrinking_the_max_clamps_the_current_offset() {
         let mut state = AppState::new();
         state.set_max_horizontal_offset(10);

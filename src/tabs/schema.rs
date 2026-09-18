@@ -44,6 +44,16 @@ impl Tab for SchemaTab {
             {
                 state.down()
             }
+            KeyCode::PageUp => {
+                let visible_rows = state.visible_data_rows();
+                let max_rows = self.max_vertical_scroll.unwrap_or(0);
+                state.page_up(visible_rows, max_rows);
+            }
+            KeyCode::PageDown => {
+                let visible_rows = state.visible_data_rows();
+                let max_rows = self.max_vertical_scroll.unwrap_or(0);
+                state.page_down(visible_rows, max_rows);
+            }
             KeyCode::Left if state.horizontal_offset() > 0 => state.left(),
             KeyCode::Right
                 if state.horizontal_offset() < self.max_horizontal_scroll.unwrap_or(usize::MAX) =>
