@@ -68,6 +68,8 @@ impl Tab for VisualizeTab {
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 state.page_down(visible_rows, max_rows);
             }
+            KeyCode::PageUp => state.page_up(visible_rows, max_rows),
+            KeyCode::PageDown => state.page_down(visible_rows, max_rows),
             // Jump to first / last row (vim-style g/G, or Home/End)
             KeyCode::Char('g') | KeyCode::Home => state.jump_to_top(),
             KeyCode::Char('G') | KeyCode::End => {
