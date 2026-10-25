@@ -3,7 +3,10 @@ use ratatui::style::Stylize;
 use ratatui::text::Span;
 use std::io;
 
-use crate::{app::AppState, tabs::Tab};
+use crate::{
+    app::AppState,
+    tabs::{EventOutcome, Tab},
+};
 
 pub struct MetadataTab {
     pub max_horizontal_scroll: Option<usize>,
@@ -36,19 +39,29 @@ impl MetadataTab {
 }
 
 impl Tab for MetadataTab {
-    fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error> {
-        if self.max_vertical_scroll.is_some() {
+    fn on_event(
+        &self,
+        key_event: KeyEvent,
+        state: &mut AppState,
+    ) -> Result<EventOutcome, io::Error> {
+        let outcome = if self.max_vertical_scroll.is_some() {
             match key_event.code {
-                KeyCode::Up if state.vertical_offset() > 0 => state.up(),
+                KeyCode::Up if state.vertical_offset() > 0 => {
+                    state.up();
+                    EventOutcome::Consumed
+                }
                 KeyCode::Down
                     if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) =>
                 {
-                    state.down()
+                    state.down();
+                    EventOutcome::Consumed
                 }
-                _ => {}
+                _ => EventOutcome::Bubble,
             }
-        }
-        Ok(())
+        } else {
+            EventOutcome::Bubble
+        };
+        Ok(outcome)
     }
 
     fn instructions(&self) -> Vec<Span<'static>> {

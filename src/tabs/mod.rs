@@ -14,8 +14,18 @@ use crossterm::event::KeyEvent;
 use ratatui::text::Span;
 use std::io;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EventOutcome {
+    Consumed,
+    Bubble,
+}
+
 pub trait Tab {
-    fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error>;
+    fn on_event(
+        &self,
+        key_event: KeyEvent,
+        state: &mut AppState,
+    ) -> Result<EventOutcome, io::Error>;
     fn instructions(&self) -> Vec<Span<'static>>;
     fn to_string(&self) -> String;
 }
