@@ -5,6 +5,15 @@ use std::io;
 use crate::file::parquet_ctx::ParquetCtx;
 use crate::tabs::TabManager;
 
+fn visible_data_rows(terminal_height: u16) -> usize {
+    // Remove the tab header (3 lines) and footer (1 line), then let the table
+    // account for its own header so navigation matches the rendered rows.
+    usize::from(crate::components::DataTable::visible_rows(
+        terminal_height.saturating_sub(4),
+    ))
+    .max(1)
+}
+
 pub struct AppRenderView<'a> {
     pub title: &'a str,
     pub parquet_ctx: &'a ParquetCtx,
@@ -207,8 +216,7 @@ impl<'a> App<'a> {
         while !self.exit {
             // Calculate visible data rows based on terminal size
             let terminal_size = terminal.size()?;
-            // Account for: header (3 lines), footer (1 line), table header (3 lines) = 7 lines total
-            let visible_data_rows = (terminal_size.height.saturating_sub(7) as usize).max(1);
+            let visible_data_rows = visible_data_rows(terminal_size.height);
             self.state.set_visible_data_rows(visible_data_rows);
 
             // Lazily (re)load the row window backing the Visualize table so only a
@@ -279,6 +287,76 @@ impl<'a> App<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+
+    fn assert_last_data_line_is_selected(app: &App<'_>, terminal_height: u16, row_number: usize) {
+        let mut terminal = Terminal::new(TestBackend::new(80, terminal_height)).unwrap();
+        let view = AppRenderView::from_app(app);
+        terminal
+            .draw(|frame| crate::ui::render_app(&view, frame))
+            .unwrap();
+
+        // The last data line is immediately above the one-line footer.
+        let row_number_cell = &terminal.backend().buffer()[(0, terminal_height - 2)];
+        assert_eq!(row_number_cell.symbol(), row_number.to_string());
+        assert!(
+            row_number_cell.modifier.contains(Modifier::UNDERLINED),
+            "last data line should be selected at terminal height {terminal_height}"
+        );
+    }
+
+    #[test]
+    fn test_visualize_selection_reaches_last_screen_line() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        assert!(ctx.sample_data_error.is_none());
+
+        for terminal_height in [8, 10, 13] {
+            let mut app = App::new(&ctx);
+            app.state
+                .set_visible_data_rows(visible_data_rows(terminal_height));
+            // Three tab-header lines, two table-header lines, one footer line.
+            let rows_on_screen = (terminal_height - 6) as usize;
+            let down = KeyEvent::from(KeyCode::Down);
+
+            for _ in 1..rows_on_screen {
+                app.handle_key_event(down);
+            }
+            assert_last_data_line_is_selected(&app, terminal_height, rows_on_screen);
+            assert_eq!(app.state.data_vertical_scroll(), 0);
+
+            app.handle_key_event(down);
+            assert_last_data_line_is_selected(&app, terminal_height, rows_on_screen + 1);
+            assert_eq!(app.state.data_vertical_scroll(), 1);
+
+            // Arrow, page and jump navigation must all reach the final file row.
+            for key in [
+                KeyCode::Down,
+                KeyCode::PageDown,
+                KeyCode::Char('d'),
+                KeyCode::End,
+                KeyCode::Char('G'),
+            ] {
+                app.state.reset();
+                for _ in 0..ctx.sample_data.total_rows {
+                    app.handle_key_event(KeyEvent::from(key));
+                }
+                assert_eq!(app.state.vertical_offset(), ctx.sample_data.total_rows - 1);
+                assert_last_data_line_is_selected(
+                    &app,
+                    terminal_height,
+                    ctx.sample_data.total_rows,
+                );
+                assert_eq!(
+                    app.state.data_vertical_scroll(),
+                    ctx.sample_data.total_rows - rows_on_screen
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_right_is_clamped_to_max_horizontal_offset() {
