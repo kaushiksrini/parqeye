@@ -339,6 +339,68 @@ mod tests {
     }
 
     #[test]
+    fn test_page_up_clamps_at_first_row() {
+        let mut state = AppState::new();
+        state.jump_to_bottom(5, 12);
+
+        for (selected, scroll) in [(6, 6), (1, 1), (0, 0), (0, 0)] {
+            state.page_up(5, 12);
+            assert_eq!(state.vertical_offset(), selected);
+            assert_eq!(state.data_vertical_scroll(), scroll);
+        }
+    }
+
+    #[test]
+    fn test_page_navigation_with_fewer_rows_than_a_page() {
+        for max_rows in [0, 1, 4, 5] {
+            let mut state = AppState::new();
+
+            for _ in 0..2 {
+                state.page_down(5, max_rows);
+                assert_eq!(state.vertical_offset(), max_rows.saturating_sub(1));
+                assert_eq!(state.data_vertical_scroll(), 0);
+            }
+
+            for _ in 0..2 {
+                state.page_up(5, max_rows);
+                assert_eq!(state.vertical_offset(), 0);
+                assert_eq!(state.data_vertical_scroll(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_page_navigation_with_one_visible_row() {
+        let mut state = AppState::new();
+
+        for selected in [1, 2, 2] {
+            state.page_down(1, 3);
+            assert_eq!(state.vertical_offset(), selected);
+            assert_eq!(state.data_vertical_scroll(), selected);
+        }
+
+        for selected in [1, 0, 0] {
+            state.page_up(1, 3);
+            assert_eq!(state.vertical_offset(), selected);
+            assert_eq!(state.data_vertical_scroll(), selected);
+        }
+    }
+
+    #[test]
+    fn test_page_navigation_keeps_selection_visible_after_resize() {
+        let mut state = AppState::new();
+        state.jump_to_bottom(5, 30);
+
+        state.page_up(10, 30);
+        assert_eq!(state.vertical_offset(), 19);
+        assert_eq!(state.data_vertical_scroll(), 19);
+
+        state.page_down(3, 30);
+        assert_eq!(state.vertical_offset(), 22);
+        assert_eq!(state.data_vertical_scroll(), 20);
+    }
+
+    #[test]
     fn test_shrinking_the_max_clamps_the_current_offset() {
         let mut state = AppState::new();
         state.set_max_horizontal_offset(10);
