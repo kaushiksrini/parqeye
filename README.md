@@ -92,6 +92,5 @@ This package is released under the [MIT License](./LICENSE).
 
 # TODOs
 
-- [ ] Lazy/streaming loading of parquet files.
 - [ ] Filter columns by value in the visualize tab.
 - [ ] Read parquet files on the cloud (`s3://...`).
