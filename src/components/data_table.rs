@@ -72,6 +72,11 @@ pub struct DataTable<'a> {
 }
 
 impl<'a> DataTable<'a> {
+    /// Number of data rows that fit below the table header.
+    pub fn visible_rows(area_height: u16) -> u16 {
+        area_height.saturating_sub(HEADER_HEIGHT)
+    }
+
     pub fn new(data: &'a ParquetSampleData) -> Self {
         Self {
             data,
@@ -155,7 +160,7 @@ impl<'a> DataTable<'a> {
     fn row_num_digits(&self, area_height: u16) -> u16 {
         row_num_digits(
             self.vertical_scroll,
-            area_height.saturating_sub(HEADER_HEIGHT),
+            Self::visible_rows(area_height),
             self.data.total_rows,
         )
     }
@@ -400,7 +405,7 @@ impl<'a> Widget for DataTable<'a> {
             area.x,
             y_first_record,
             area.width,
-            area.height.saturating_sub(HEADER_HEIGHT),
+            Self::visible_rows(area.height),
         );
 
         // Render row numbers
