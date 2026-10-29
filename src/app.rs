@@ -289,8 +289,11 @@ mod tests {
     use super::*;
     use crate::file::schema::{SchemaInfo, tests::scroll_test_schema};
     use crossterm::event::KeyModifiers;
-    use ratatui::{Terminal, backend::TestBackend, style::Color};
-    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        style::{Color, Modifier},
+    };
 
     fn assert_last_data_line_is_selected(app: &App<'_>, terminal_height: u16, row_number: usize) {
         let mut terminal = Terminal::new(TestBackend::new(80, terminal_height)).unwrap();
@@ -314,7 +317,7 @@ mod tests {
             "{}/alltypes_plain.parquet",
             crate::file::parquet_test_data()
         );
-       let ctx = ParquetCtx::from_file(&path).unwrap();
+        let ctx = ParquetCtx::from_file(&path).unwrap();
         assert!(ctx.sample_data_error.is_none());
 
         for terminal_height in [8, 10, 13] {
@@ -362,6 +365,10 @@ mod tests {
     }
 
     fn assert_schema_highlights_align(nested: bool) {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
         let mut context = ParquetCtx::from_file(&path).unwrap();
         context.schema = scroll_test_schema(nested);
         let names = context.schema.primitive_column_names();
