@@ -287,7 +287,13 @@ impl<'a> App<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+    use crate::file::schema::{SchemaInfo, tests::scroll_test_schema};
+    use crossterm::event::KeyModifiers;
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        style::{Color, Modifier},
+    };
 
     fn assert_last_data_line_is_selected(app: &App<'_>, terminal_height: u16, row_number: usize) {
         let mut terminal = Terminal::new(TestBackend::new(80, terminal_height)).unwrap();
@@ -356,6 +362,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn assert_schema_highlights_align(nested: bool) {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let mut context = ParquetCtx::from_file(&path).unwrap();
+        context.schema = scroll_test_schema(nested);
+        let names = context.schema.primitive_column_names();
+
+        for height in [8, 12, 24] {
+            for horizontal_scroll in [0, 7, 9] {
+                let mut app = App::new(&context);
+                app.tabs.active_tab = 2;
+                for _ in 0..horizontal_scroll {
+                    app.state.right();
+                }
+                let table_x = context.schema.tree_width() as u16 + 3;
+                // Leave room for one statistics column so every horizontal offset applies.
+                let width = table_x + 15;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+
+                for key in [KeyCode::Down, KeyCode::Up] {
+                    for _ in 0..names.len() {
+                        app.handle_key_event(KeyEvent::new(key, KeyModifiers::NONE));
+                        terminal
+                            .draw(|frame| {
+                                crate::ui::render_app(&AppRenderView::from_app(&app), frame)
+                            })
+                            .unwrap();
+                        let buffer = terminal.backend().buffer();
+                        let highlighted_rows = |x| {
+                            (0..height)
+                                .filter(|&y| buffer[(x, y)].bg == Color::Yellow)
+                                .collect::<Vec<_>>()
+                        };
+                        let tree_rows = highlighted_rows(1);
+                        let table_rows = highlighted_rows(table_x);
+                        let selected = app.state.vertical_offset();
+                        assert_eq!(
+                            tree_rows, table_rows,
+                            "nested {nested}, height {height}, horizontal {horizontal_scroll}, selection {selected}"
+                        );
+                        if selected == 0 {
+                            assert!(tree_rows.is_empty());
+                            continue;
+                        }
+                        assert_eq!(tree_rows.len(), 1, "selection must stay visible");
+                        let y = tree_rows[0];
+                        let tree_text: String =
+                            (1..table_x - 2).map(|x| buffer[(x, y)].symbol()).collect();
+                        assert!(tree_text.contains(&names[selected - 1]));
+
+                        let table_text: String = (table_x..width - 1)
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect();
+                        let expected = match horizontal_scroll {
+                            0 => context
+                                .schema
+                                .columns
+                                .iter()
+                                .filter_map(|column| match column {
+                                    SchemaInfo::Primitive { info, .. } => {
+                                        Some(info.repetition.as_str())
+                                    }
+                                    _ => None,
+                                })
+                                .nth(selected - 1)
+                                .unwrap(),
+                            7 => &names[selected - 1],
+                            9 => "0",
+                            _ => unreachable!(),
+                        };
+                        assert!(table_text.starts_with(expected), "{table_text:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_schema_highlights_align_when_scrolling_nested_groups() {
+        assert_schema_highlights_align(true);
+    }
+
+    #[test]
+    fn test_schema_highlights_align_when_scrolling_flat_schema() {
+        assert_schema_highlights_align(false);
     }
 
     #[test]

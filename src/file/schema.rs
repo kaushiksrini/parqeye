@@ -223,16 +223,23 @@ impl FileSchema {
         start_row: usize,
         num_rows: usize,
     ) -> (Vec<Row<'_>>, Vec<usize>) {
-        let mut primitive_index = 1; // Start counting primitives from 1 (like app does)
+        // Scrolling counts all tree rows, but selection counts only primitive columns.
+        // Include primitives above the viewport when numbering the visible rows.
+        let start_index = start_row.saturating_add(1); // Skip the root/header row.
+        let mut primitive_index = 1 + self
+            .columns
+            .iter()
+            .take(start_index)
+            .filter(|col| matches!(col, SchemaInfo::Primitive { .. }))
+            .count();
         let mut column_widths = vec![0usize; num_cols];
 
         let rows = self
             .columns
             .iter()
-            .enumerate()
-            .skip(start_row + 1)
+            .skip(start_index)
             .take(num_rows)
-            .filter_map(|(_col_idx, col)| {
+            .filter_map(|col| {
                 if let SchemaInfo::Primitive { info, stats, .. } = col {
                     let compression_ratio = if stats.total_uncompressed_size > 0 {
                         format!(
@@ -244,8 +251,7 @@ impl FileSchema {
                         "N/A".to_string()
                     };
 
-                    let is_selected =
-                        selected_index > 0 && (selected_index - start_row) == primitive_index;
+                    let is_selected = selected_index == primitive_index;
 
                     // Create all cells first
                     let all_cells = vec![
@@ -598,10 +604,77 @@ fn logical_type_to_string(logical_type: &LogicalType) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use parquet::file::metadata::FileMetaData;
     use parquet::file::reader::{FileReader, SerializedFileReader};
+    use parquet::schema::{parser::parse_message_type, types::SchemaDescriptor};
     use std::fs::File;
+    use std::sync::Arc;
+
+    pub(crate) fn scroll_test_schema(nested: bool) -> FileSchema {
+        let fields = (0..12)
+            .map(|i| {
+                let leaves = format!("OPTIONAL INT32 leaf_{i}_a; REQUIRED INT64 leaf_{i}_b;");
+                if nested {
+                    format!(
+                        "OPTIONAL GROUP group_{i} {{ REQUIRED GROUP inner_{i} {{ {leaves} }} }}"
+                    )
+                } else {
+                    leaves
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let root = parse_message_type(&format!("message root {{ {fields} }}")).unwrap();
+        let descriptor = Arc::new(SchemaDescriptor::new(Arc::new(root)));
+        let metadata = ParquetMetaData::new(
+            FileMetaData::new(1, 0, None, None, descriptor, None),
+            vec![],
+        );
+        let mut schema = FileSchema::from_metadata(&metadata).unwrap();
+        for column in &mut schema.columns {
+            if let SchemaInfo::Primitive { name, stats, .. } = column {
+                // Distinct values let rendering tests identify the selected data row.
+                stats.min = Some(name.clone());
+            }
+        }
+        schema
+    }
+
+    #[test]
+    fn test_scrolled_schema_rows_preserve_selection_with_groups() {
+        let schema = scroll_test_schema(true);
+        for selected in 0..=schema.column_size() {
+            let (all_rows, _) = schema.generate_table_rows_with_columns(selected, 0, 10);
+            for start in 0..schema.columns.len() {
+                let (rows, _) = schema.generate_table_rows_with_scroll(selected, 0, 10, start, 5);
+                let end = (start + 5).min(all_rows.len());
+                assert_eq!(
+                    rows,
+                    all_rows[start.min(all_rows.len())..end],
+                    "selection {selected}, scroll {start}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_scrolled_schema_rows_preserve_selection_without_groups() {
+        let schema = scroll_test_schema(false);
+        for selected in 0..=schema.column_size() {
+            let (all_rows, _) = schema.generate_table_rows_with_columns(selected, 7, 3);
+            for start in 0..schema.columns.len() {
+                let (rows, _) = schema.generate_table_rows_with_scroll(selected, 7, 3, start, 5);
+                let end = (start + 5).min(all_rows.len());
+                assert_eq!(
+                    rows,
+                    all_rows[start.min(all_rows.len())..end],
+                    "selection {selected}, scroll {start}"
+                );
+            }
+        }
+    }
 
     fn load_alltypes_schema() -> FileSchema {
         let path = format!(
