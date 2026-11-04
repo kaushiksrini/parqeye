@@ -3,7 +3,8 @@ use ratatui::DefaultTerminal;
 use std::io;
 
 use crate::file::parquet_ctx::ParquetCtx;
-use crate::tabs::TabManager;
+use crate::tabs::visualize::VisualizeState;
+use crate::tabs::{EventOutcome, TabManager};
 
 fn visible_data_rows(terminal_height: u16) -> usize {
     // Remove the tab header (3 lines) and footer (1 line), then let the table
@@ -63,6 +64,7 @@ pub struct AppState {
     // Upper bound for `horizontal_offset`, recomputed each frame from the
     // on-screen column count. Prevents scrolling past the last visible column.
     max_horizontal_offset: usize,
+    visualize: VisualizeState,
 }
 
 impl Default for AppState {
@@ -80,6 +82,7 @@ impl AppState {
             data_vertical_scroll: 0,
             visible_data_rows: 20, // Default fallback
             max_horizontal_offset: usize::MAX,
+            visualize: VisualizeState::default(),
         }
     }
 
@@ -88,6 +91,7 @@ impl AppState {
         self.vertical_offset = 0;
         self.tree_scroll_offset = 0;
         self.data_vertical_scroll = 0;
+        self.visualize.cancel_prompt();
     }
 
     pub fn horizontal_offset(&self) -> usize {
@@ -149,6 +153,14 @@ impl AppState {
         self.visible_data_rows = rows;
     }
 
+    pub fn visualize(&self) -> &VisualizeState {
+        &self.visualize
+    }
+
+    pub fn visualize_mut(&mut self) -> &mut VisualizeState {
+        &mut self.visualize
+    }
+
     pub fn page_up(&mut self, visible_rows: usize, max_rows: usize) {
         // Move selection up by visible_rows
         self.vertical_offset = self.vertical_offset.saturating_sub(visible_rows);
@@ -173,6 +185,12 @@ impl AppState {
     /// Jump the selection (and viewport) to the last row.
     pub fn jump_to_bottom(&mut self, visible_rows: usize, max_rows: usize) {
         self.vertical_offset = max_rows.saturating_sub(1);
+        self.adjust_scroll_to_selection(visible_rows, max_rows);
+    }
+
+    /// Jump to an absolute, zero-based row and keep it visible.
+    pub fn jump_to_row(&mut self, row: usize, visible_rows: usize, max_rows: usize) {
+        self.vertical_offset = row.min(max_rows.saturating_sub(1));
         self.adjust_scroll_to_selection(visible_rows, max_rows);
     }
 
@@ -259,6 +277,15 @@ impl<'a> App<'a> {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        let outcome = self
+            .tabs
+            .active_tab()
+            .on_event(key_event, &mut self.state)
+            .unwrap();
+        if outcome == EventOutcome::Consumed {
+            return;
+        }
+
         match key_event.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
             KeyCode::Esc => self.state.reset(),
@@ -270,12 +297,7 @@ impl<'a> App<'a> {
                 self.tabs.prev();
                 self.state.reset();
             }
-            _ => {
-                self.tabs
-                    .active_tab()
-                    .on_event(key_event, &mut self.state)
-                    .unwrap();
-            }
+            _ => {}
         }
     }
 

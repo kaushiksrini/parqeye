@@ -1,4 +1,7 @@
-use crate::{app::AppState, tabs::Tab};
+use crate::{
+    app::AppState,
+    tabs::{EventOutcome, Tab},
+};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::Stylize;
 use ratatui::text::Span;
@@ -35,33 +38,47 @@ impl RowGroupsTab {
 }
 
 impl Tab for RowGroupsTab {
-    fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error> {
-        match key_event.code {
-            KeyCode::Up if state.vertical_offset() > 0 => state.up(),
+    fn on_event(
+        &self,
+        key_event: KeyEvent,
+        state: &mut AppState,
+    ) -> Result<EventOutcome, io::Error> {
+        let outcome = match key_event.code {
+            KeyCode::Up if state.vertical_offset() > 0 => {
+                state.up();
+                EventOutcome::Consumed
+            }
             KeyCode::Down
                 if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) =>
             {
-                state.down()
+                state.down();
+                EventOutcome::Consumed
+            }
+            KeyCode::Left if state.horizontal_offset() > 0 => {
+                state.left();
+                EventOutcome::Consumed
             }
             KeyCode::PageUp => {
                 let visible_rows = state.visible_data_rows();
                 let max_rows = self.max_vertical_scroll.unwrap_or(0);
                 state.page_up(visible_rows, max_rows);
+                EventOutcome::Consumed
             }
             KeyCode::PageDown => {
                 let visible_rows = state.visible_data_rows();
                 let max_rows = self.max_vertical_scroll.unwrap_or(0);
                 state.page_down(visible_rows, max_rows);
+                EventOutcome::Consumed
             }
-            KeyCode::Left if state.horizontal_offset() > 0 => state.left(),
             KeyCode::Right
                 if state.horizontal_offset() < self.max_horizontal_scroll.unwrap_or(usize::MAX) =>
             {
-                state.right()
+                state.right();
+                EventOutcome::Consumed
             }
-            _ => {}
-        }
-        Ok(())
+            _ => EventOutcome::Bubble,
+        };
+        Ok(outcome)
     }
 
     fn instructions(&self) -> Vec<Span<'static>> {
