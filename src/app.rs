@@ -6,6 +6,15 @@ use crate::file::parquet_ctx::ParquetCtx;
 use crate::tabs::visualize::VisualizeState;
 use crate::tabs::{EventOutcome, TabManager};
 
+fn visible_data_rows(terminal_height: u16) -> usize {
+    // Remove the tab header (3 lines) and footer (1 line), then let the table
+    // account for its own header so navigation matches the rendered rows.
+    usize::from(crate::components::DataTable::visible_rows(
+        terminal_height.saturating_sub(4),
+    ))
+    .max(1)
+}
+
 pub struct AppRenderView<'a> {
     pub title: &'a str,
     pub parquet_ctx: &'a ParquetCtx,
@@ -225,8 +234,7 @@ impl<'a> App<'a> {
         while !self.exit {
             // Calculate visible data rows based on terminal size
             let terminal_size = terminal.size()?;
-            // Account for: header (3 lines), footer (1 line), table header (3 lines) = 7 lines total
-            let visible_data_rows = (terminal_size.height.saturating_sub(7) as usize).max(1);
+            let visible_data_rows = visible_data_rows(terminal_size.height);
             self.state.set_visible_data_rows(visible_data_rows);
 
             // Lazily (re)load the row window backing the Visualize table so only a
@@ -301,6 +309,171 @@ impl<'a> App<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file::schema::{SchemaInfo, tests::scroll_test_schema};
+    use crossterm::event::KeyModifiers;
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        style::{Color, Modifier},
+    };
+
+    fn assert_last_data_line_is_selected(app: &App<'_>, terminal_height: u16, row_number: usize) {
+        let mut terminal = Terminal::new(TestBackend::new(80, terminal_height)).unwrap();
+        let view = AppRenderView::from_app(app);
+        terminal
+            .draw(|frame| crate::ui::render_app(&view, frame))
+            .unwrap();
+
+        // The last data line is immediately above the one-line footer.
+        let row_number_cell = &terminal.backend().buffer()[(0, terminal_height - 2)];
+        assert_eq!(row_number_cell.symbol(), row_number.to_string());
+        assert!(
+            row_number_cell.modifier.contains(Modifier::UNDERLINED),
+            "last data line should be selected at terminal height {terminal_height}"
+        );
+    }
+
+    #[test]
+    fn test_visualize_selection_reaches_last_screen_line() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        assert!(ctx.sample_data_error.is_none());
+
+        for terminal_height in [8, 10, 13] {
+            let mut app = App::new(&ctx);
+            app.state
+                .set_visible_data_rows(visible_data_rows(terminal_height));
+            // Three tab-header lines, two table-header lines, one footer line.
+            let rows_on_screen = (terminal_height - 6) as usize;
+            let down = KeyEvent::from(KeyCode::Down);
+
+            for _ in 1..rows_on_screen {
+                app.handle_key_event(down);
+            }
+            assert_last_data_line_is_selected(&app, terminal_height, rows_on_screen);
+            assert_eq!(app.state.data_vertical_scroll(), 0);
+
+            app.handle_key_event(down);
+            assert_last_data_line_is_selected(&app, terminal_height, rows_on_screen + 1);
+            assert_eq!(app.state.data_vertical_scroll(), 1);
+
+            // Arrow, page and jump navigation must all reach the final file row.
+            for key in [
+                KeyCode::Down,
+                KeyCode::PageDown,
+                KeyCode::Char('d'),
+                KeyCode::End,
+                KeyCode::Char('G'),
+            ] {
+                app.state.reset();
+                for _ in 0..ctx.sample_data.total_rows {
+                    app.handle_key_event(KeyEvent::from(key));
+                }
+                assert_eq!(app.state.vertical_offset(), ctx.sample_data.total_rows - 1);
+                assert_last_data_line_is_selected(
+                    &app,
+                    terminal_height,
+                    ctx.sample_data.total_rows,
+                );
+                assert_eq!(
+                    app.state.data_vertical_scroll(),
+                    ctx.sample_data.total_rows - rows_on_screen
+                );
+            }
+        }
+    }
+
+    fn assert_schema_highlights_align(nested: bool) {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let mut context = ParquetCtx::from_file(&path).unwrap();
+        context.schema = scroll_test_schema(nested);
+        let names = context.schema.primitive_column_names();
+
+        for height in [8, 12, 24] {
+            for horizontal_scroll in [0, 7, 9] {
+                let mut app = App::new(&context);
+                app.tabs.active_tab = 2;
+                for _ in 0..horizontal_scroll {
+                    app.state.right();
+                }
+                let table_x = context.schema.tree_width() as u16 + 3;
+                // Leave room for one statistics column so every horizontal offset applies.
+                let width = table_x + 15;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+
+                for key in [KeyCode::Down, KeyCode::Up] {
+                    for _ in 0..names.len() {
+                        app.handle_key_event(KeyEvent::new(key, KeyModifiers::NONE));
+                        terminal
+                            .draw(|frame| {
+                                crate::ui::render_app(&AppRenderView::from_app(&app), frame)
+                            })
+                            .unwrap();
+                        let buffer = terminal.backend().buffer();
+                        let highlighted_rows = |x| {
+                            (0..height)
+                                .filter(|&y| buffer[(x, y)].bg == Color::Yellow)
+                                .collect::<Vec<_>>()
+                        };
+                        let tree_rows = highlighted_rows(1);
+                        let table_rows = highlighted_rows(table_x);
+                        let selected = app.state.vertical_offset();
+                        assert_eq!(
+                            tree_rows, table_rows,
+                            "nested {nested}, height {height}, horizontal {horizontal_scroll}, selection {selected}"
+                        );
+                        if selected == 0 {
+                            assert!(tree_rows.is_empty());
+                            continue;
+                        }
+                        assert_eq!(tree_rows.len(), 1, "selection must stay visible");
+                        let y = tree_rows[0];
+                        let tree_text: String =
+                            (1..table_x - 2).map(|x| buffer[(x, y)].symbol()).collect();
+                        assert!(tree_text.contains(&names[selected - 1]));
+
+                        let table_text: String = (table_x..width - 1)
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect();
+                        let expected = match horizontal_scroll {
+                            0 => context
+                                .schema
+                                .columns
+                                .iter()
+                                .filter_map(|column| match column {
+                                    SchemaInfo::Primitive { info, .. } => {
+                                        Some(info.repetition.as_str())
+                                    }
+                                    _ => None,
+                                })
+                                .nth(selected - 1)
+                                .unwrap(),
+                            7 => &names[selected - 1],
+                            9 => "0",
+                            _ => unreachable!(),
+                        };
+                        assert!(table_text.starts_with(expected), "{table_text:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_schema_highlights_align_when_scrolling_nested_groups() {
+        assert_schema_highlights_align(true);
+    }
+
+    #[test]
+    fn test_schema_highlights_align_when_scrolling_flat_schema() {
+        assert_schema_highlights_align(false);
+    }
 
     #[test]
     fn test_right_is_clamped_to_max_horizontal_offset() {
@@ -337,6 +510,89 @@ mod tests {
         state.jump_to_top();
         assert_eq!(state.vertical_offset(), 0);
         assert_eq!(state.data_vertical_scroll(), 0);
+    }
+
+    #[test]
+    fn test_page_navigation_moves_by_visible_rows_and_clamps() {
+        let mut state = AppState::new();
+
+        state.page_down(5, 12);
+        assert_eq!(state.vertical_offset(), 5);
+        assert_eq!(state.data_vertical_scroll(), 1);
+
+        state.page_down(5, 12);
+        assert_eq!(state.vertical_offset(), 10);
+        assert_eq!(state.data_vertical_scroll(), 6);
+
+        state.page_down(5, 12);
+        assert_eq!(state.vertical_offset(), 11);
+        assert_eq!(state.data_vertical_scroll(), 7);
+
+        state.page_up(5, 12);
+        assert_eq!(state.vertical_offset(), 6);
+        assert_eq!(state.data_vertical_scroll(), 6);
+    }
+
+    #[test]
+    fn test_page_up_clamps_at_first_row() {
+        let mut state = AppState::new();
+        state.jump_to_bottom(5, 12);
+
+        for (selected, scroll) in [(6, 6), (1, 1), (0, 0), (0, 0)] {
+            state.page_up(5, 12);
+            assert_eq!(state.vertical_offset(), selected);
+            assert_eq!(state.data_vertical_scroll(), scroll);
+        }
+    }
+
+    #[test]
+    fn test_page_navigation_with_fewer_rows_than_a_page() {
+        for max_rows in [0, 1, 4, 5] {
+            let mut state = AppState::new();
+
+            for _ in 0..2 {
+                state.page_down(5, max_rows);
+                assert_eq!(state.vertical_offset(), max_rows.saturating_sub(1));
+                assert_eq!(state.data_vertical_scroll(), 0);
+            }
+
+            for _ in 0..2 {
+                state.page_up(5, max_rows);
+                assert_eq!(state.vertical_offset(), 0);
+                assert_eq!(state.data_vertical_scroll(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_page_navigation_with_one_visible_row() {
+        let mut state = AppState::new();
+
+        for selected in [1, 2, 2] {
+            state.page_down(1, 3);
+            assert_eq!(state.vertical_offset(), selected);
+            assert_eq!(state.data_vertical_scroll(), selected);
+        }
+
+        for selected in [1, 0, 0] {
+            state.page_up(1, 3);
+            assert_eq!(state.vertical_offset(), selected);
+            assert_eq!(state.data_vertical_scroll(), selected);
+        }
+    }
+
+    #[test]
+    fn test_page_navigation_keeps_selection_visible_after_resize() {
+        let mut state = AppState::new();
+        state.jump_to_bottom(5, 30);
+
+        state.page_up(10, 30);
+        assert_eq!(state.vertical_offset(), 19);
+        assert_eq!(state.data_vertical_scroll(), 19);
+
+        state.page_down(3, 30);
+        assert_eq!(state.vertical_offset(), 22);
+        assert_eq!(state.data_vertical_scroll(), 20);
     }
 
     #[test]

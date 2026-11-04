@@ -56,6 +56,18 @@ impl Tab for MetadataTab {
                     state.down();
                     EventOutcome::Consumed
                 }
+                KeyCode::PageUp => {
+                    let visible_rows = state.visible_data_rows();
+                    let max_rows = self.max_vertical_scroll.unwrap_or(0).saturating_add(1);
+                    state.page_up(visible_rows, max_rows);
+                    EventOutcome::Consumed
+                }
+                KeyCode::PageDown => {
+                    let visible_rows = state.visible_data_rows();
+                    let max_rows = self.max_vertical_scroll.unwrap_or(0).saturating_add(1);
+                    state.page_down(visible_rows, max_rows);
+                    EventOutcome::Consumed
+                }
                 _ => EventOutcome::Bubble,
             }
         } else {

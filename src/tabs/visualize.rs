@@ -170,12 +170,12 @@ impl Tab for VisualizeTab {
                 }
                 EventOutcome::Consumed
             }
-            // Page navigation (u/d keys)
-            KeyCode::Char('u') | KeyCode::Char('U') => {
+            // Page navigation (u/d keys or PageUp/PageDown)
+            KeyCode::Char('u') | KeyCode::Char('U') | KeyCode::PageUp => {
                 state.page_up(visible_rows, max_rows);
                 EventOutcome::Consumed
             }
-            KeyCode::Char('d') | KeyCode::Char('D') => {
+            KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::PageDown => {
                 state.page_down(visible_rows, max_rows);
                 EventOutcome::Consumed
             }
