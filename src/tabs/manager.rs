@@ -64,6 +64,15 @@ impl TabManager {
         &self.tabs[self.active_tab]
     }
 
+    /// Width of the tab titles, their padding, and the spaces between tabs.
+    pub fn content_width(&self) -> usize {
+        self.tabs
+            .iter()
+            .map(|tab| Line::from(tab.to_string()).width() + 2)
+            .sum::<usize>()
+            + self.tabs.len().saturating_sub(1)
+    }
+
     pub fn render_instructions(&self, area: Rect, buf: &mut Buffer) {
         let mut span = self.active_tab().instructions();
         if !span.is_empty() {

@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    prelude::Color,
+    prelude::{Color, Position},
     style::{Style, Stylize},
     text::Line,
     widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap},
@@ -14,12 +14,28 @@ use crate::components::{
     RowGroupProgressBar, SchemaTreeComponent, ScrollbarComponent,
 };
 use crate::file::Renderable;
+use crate::tabs::TabManager;
 
 pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
     'b: 'a,
 {
-    frame.render_widget(AppWidget(app), frame.area());
+    let area = frame.area();
+    frame.render_widget(AppWidget(app), area);
+
+    if area.width > 0
+        && area.height > 0
+        && let Some(prompt) = app.state().visualize().prompt()
+    {
+        let buffer_cursor_width = prompt.buffer[..prompt.cursor].chars().count() as u16;
+        // The prompt prefix precedes the buffer at the start of the footer.
+        let cursor_x = area
+            .x
+            .saturating_add(1)
+            .saturating_add(buffer_cursor_width)
+            .min(area.right().saturating_sub(1));
+        frame.set_cursor_position(Position::new(cursor_x, area.bottom().saturating_sub(1)));
+    }
 }
 
 struct AppWidget<'a>(&'a AppRenderView<'a>);
@@ -133,28 +149,26 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_tabs_view(&self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::LightYellow));
-        let inner_area = block.inner(area);
-        block.render(area, buf);
-
-        let file_name_length = self.0.file_name().len() as u16;
-
-        let [tabs_area, file_name_area] =
-            Layout::horizontal([Constraint::Min(0), Constraint::Length(file_name_length)])
-                .areas(inner_area);
-        self.0.tabs().render_content(tabs_area, buf);
-        self.0.file_name().green().render(file_name_area, buf);
+        render_tabs_header(self.0.tabs(), self.0.file_name(), area, buf);
     }
 
     fn render_footer_view(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(prompt) = self.0.state().visualize().prompt() {
+            let mut spans = vec![
+                prompt.kind.prefix().to_string().green(),
+                prompt.buffer.clone().into(),
+            ];
+            if let Some(error) = &prompt.error {
+                spans.extend(["  ".into(), error.clone().red()]);
+            }
+            Line::from(spans).render(area, buf);
+            return;
+        }
+
         let title_width = self.0.title.len() as u16;
         let [title_area, footer_area] =
             Layout::horizontal([Constraint::Length(title_width), Constraint::Fill(1)]).areas(area);
         self.0.title.bold().fg(Color::Green).render(title_area, buf);
-
         self.0.tabs().render_instructions(footer_area, buf);
     }
 
@@ -266,6 +280,33 @@ impl<'a> AppWidget<'a> {
     }
 }
 
+fn render_tabs_header(tabs: &TabManager, file_name: &str, area: Rect, buf: &mut Buffer) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::LightYellow));
+    let inner_area = block.inner(area);
+    block.render(area, buf);
+
+    // Reserve the tabs and a gap before giving the path any remaining space.
+    let available_width = usize::from(inner_area.width).saturating_sub(tabs.content_width() + 1);
+    let file_name_line = Line::from(file_name).green().right_aligned();
+    let file_name_width = file_name_line.width().min(available_width) as u16;
+    let [tabs_area, file_name_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(file_name_width)])
+            .areas(inner_area);
+    tabs.render_content(tabs_area, buf);
+
+    if file_name_line.width() > usize::from(file_name_width) && file_name_width > 0 {
+        let [ellipsis_area, suffix_area] =
+            Layout::horizontal([Constraint::Length(1), Constraint::Fill(1)]).areas(file_name_area);
+        "…".green().render(ellipsis_area, buf);
+        file_name_line.render(suffix_area, buf);
+    } else {
+        file_name_line.render(file_name_area, buf);
+    }
+}
+
 /// show error screen and error when failing
 fn render_sample_data_error(error: &str, area: Rect, buf: &mut Buffer) {
     let block = Block::default()
@@ -313,6 +354,64 @@ impl<'a> Widget for AppWidget<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_file_paths_leave_all_tabs_visible() {
+        let tabs = TabManager::new(1, 1, 1, 1);
+        let paths = [
+            format!("{}/data.parquet", "/many/nested/directories".repeat(10)),
+            format!("{}/data.parquet", "/資料/📊".repeat(10)),
+            format!("{}/data.parquet", "a".repeat(65_536)),
+        ];
+        for path in paths {
+            let area = Rect::new(0, 0, 80, 3);
+            let mut buf = Buffer::empty(area);
+            render_tabs_header(&tabs, &path, area, &mut buf);
+
+            let header: String = (1..79).map(|x| buf[(x, 1)].symbol()).collect();
+            assert!(header.starts_with(" Visualize   Metadata   Schema   Row Groups "));
+            assert!(header.contains('…'));
+            assert!(header.ends_with("/data.parquet"));
+            assert_eq!(buf[(79, 1)].symbol(), "│");
+        }
+    }
+
+    #[test]
+    fn file_paths_that_fit_are_shown_in_full_using_display_width() {
+        let tabs = TabManager::new(1, 1, 1, 1);
+        for path in ["data.parquet", "/資料/e\u{301}📊.parquet"] {
+            let header = format!(" Visualize   Metadata   Schema   Row Groups  {path}");
+            let border = "─".repeat(Line::from(header.as_str()).width());
+            let expected = Buffer::with_lines([
+                format!("╭{border}╮"),
+                format!("│{header}│"),
+                format!("╰{border}╯"),
+            ]);
+            let mut actual = Buffer::empty(expected.area);
+            render_tabs_header(&tabs, path, expected.area, &mut actual);
+
+            for (actual, expected) in actual.content().iter().zip(expected.content()) {
+                assert_eq!(actual.symbol(), expected.symbol());
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_headers_prioritize_tabs_and_do_not_panic() {
+        let tabs = TabManager::new(1, 1, 1, 1);
+        for width in 0..=50 {
+            let area = Rect::new(0, 0, width, 3);
+            let mut with_path = Buffer::empty(area);
+            let mut without_path = Buffer::empty(area);
+            render_tabs_header(&tabs, "/long/path/to/data.parquet", area, &mut with_path);
+            render_tabs_header(&tabs, "", area, &mut without_path);
+
+            // The file path must never change the cells occupied by tab labels.
+            for x in 1..width.saturating_sub(1).min(tabs.content_width() as u16 + 1) {
+                assert_eq!(with_path[(x, 1)], without_path[(x, 1)]);
+            }
+        }
+    }
 
     #[test]
     fn sample_data_error_is_rendered_instead_of_the_table() {

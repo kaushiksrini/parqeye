@@ -3,7 +3,10 @@ use ratatui::style::Stylize;
 use ratatui::text::Span;
 use std::io;
 
-use crate::{app::AppState, tabs::Tab};
+use crate::{
+    app::AppState,
+    tabs::{EventOutcome, Tab},
+};
 
 pub struct MetadataTab {
     pub max_horizontal_scroll: Option<usize>,
@@ -36,19 +39,41 @@ impl MetadataTab {
 }
 
 impl Tab for MetadataTab {
-    fn on_event(&self, key_event: KeyEvent, state: &mut AppState) -> Result<(), io::Error> {
-        if self.max_vertical_scroll.is_some() {
+    fn on_event(
+        &self,
+        key_event: KeyEvent,
+        state: &mut AppState,
+    ) -> Result<EventOutcome, io::Error> {
+        let outcome = if self.max_vertical_scroll.is_some() {
             match key_event.code {
-                KeyCode::Up if state.vertical_offset() > 0 => state.up(),
+                KeyCode::Up if state.vertical_offset() > 0 => {
+                    state.up();
+                    EventOutcome::Consumed
+                }
                 KeyCode::Down
                     if state.vertical_offset() < self.max_vertical_scroll.unwrap_or(usize::MAX) =>
                 {
-                    state.down()
+                    state.down();
+                    EventOutcome::Consumed
                 }
-                _ => {}
+                KeyCode::PageUp => {
+                    let visible_rows = state.visible_data_rows();
+                    let max_rows = self.max_vertical_scroll.unwrap_or(0).saturating_add(1);
+                    state.page_up(visible_rows, max_rows);
+                    EventOutcome::Consumed
+                }
+                KeyCode::PageDown => {
+                    let visible_rows = state.visible_data_rows();
+                    let max_rows = self.max_vertical_scroll.unwrap_or(0).saturating_add(1);
+                    state.page_down(visible_rows, max_rows);
+                    EventOutcome::Consumed
+                }
+                _ => EventOutcome::Bubble,
             }
-        }
-        Ok(())
+        } else {
+            EventOutcome::Bubble
+        };
+        Ok(outcome)
     }
 
     fn instructions(&self) -> Vec<Span<'static>> {
