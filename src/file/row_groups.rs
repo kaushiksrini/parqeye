@@ -98,7 +98,7 @@ impl RowGroupAvgMedianStats {
             median_compression_ratio: row_groups_stats
                 .iter()
                 .map(|rg| rg.compression_ratio)
-                .sorted_by(|a, b| a.partial_cmp(b).unwrap())
+                .sorted_by(|a, b| a.total_cmp(b))
                 .nth(row_groups_stats.len() / 2)
                 .unwrap_or(0.),
         }
@@ -148,7 +148,11 @@ impl RowGroupStats {
         let rg_md: &RowGroupMetaData = reader.metadata().row_group(idx);
         let compressed_size = rg_md.columns().iter().map(|c| c.compressed_size()).sum();
         let uncompressed_size = rg_md.columns().iter().map(|c| c.uncompressed_size()).sum();
-        let compression_ratio = uncompressed_size as f64 / compressed_size as f64;
+        let compression_ratio = if compressed_size > 0 {
+            uncompressed_size as f64 / compressed_size as f64
+        } else {
+            0.0
+        };
 
         let column_metadata = (0..rg_md.num_columns())
             .map(|col_idx| RowGroupColumnMetadata::from_file_reader(reader, idx, col_idx))
