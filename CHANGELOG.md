@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Startup panic when opening files with row groups that have zero compressed size ([#51](https://github.com/kaushiksrini/parqeye/pull/51))
 - Last-row selection in Visualize ([#55](https://github.com/kaushiksrini/parqeye/pull/55))
 - Schema tree and table alignment when scrolling ([#56](https://github.com/kaushiksrini/parqeye/pull/56))
 - Row groups disappearing when scrolling through many groups ([#57](https://github.com/kaushiksrini/parqeye/pull/57))
