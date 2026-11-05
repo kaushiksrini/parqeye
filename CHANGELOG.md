@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `PgUp`/`PgDn` navigation across tabs ([#50](https://github.com/kaushiksrini/parqeye/pull/50))
+- Jump to a row by typing `:` followed by its row number in Visualize ([#52](https://github.com/kaushiksrini/parqeye/pull/52))
+
+### Fixed
+
+- Startup panic when opening files with row groups that have zero compressed size ([#51](https://github.com/kaushiksrini/parqeye/pull/51))
+- Last-row selection in Visualize ([#55](https://github.com/kaushiksrini/parqeye/pull/55))
+- Schema tree and table alignment when scrolling ([#56](https://github.com/kaushiksrini/parqeye/pull/56))
+- Row groups disappearing when scrolling through many groups ([#57](https://github.com/kaushiksrini/parqeye/pull/57))
+- Long file paths hiding the tabs ([#58](https://github.com/kaushiksrini/parqeye/pull/58))
+
+### Changed
+
+- Updated dependencies ([#53](https://github.com/kaushiksrini/parqeye/pull/53))
+
 ## [0.2.0]
 
 ### Added
