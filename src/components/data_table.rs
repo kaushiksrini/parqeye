@@ -1,4 +1,5 @@
 use crate::file::sample_data::ParquetSampleData;
+use crate::tabs::visualize::SelectionMode;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -18,6 +19,26 @@ const NUM_SPACES_AFTER_LINE_NUMBER: u16 = 2;
 const MIN_ROW_NUM_DIGITS: u16 = 4;
 /// Header text line plus the separator line above the first data row.
 const HEADER_HEIGHT: u16 = 2;
+
+/// Truncate by terminal display width without splitting UTF-8 characters.
+fn truncate_cell(text: &str, width: u16) -> String {
+    if Span::raw(text).width() <= usize::from(width) {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut prefix = String::new();
+    for character in text.chars() {
+        let next = format!("{prefix}{character}");
+        if Span::raw(next.as_str()).width() > usize::from(width - 1) {
+            break;
+        }
+        prefix.push(character);
+    }
+    prefix.push('…');
+    prefix
+}
 
 /// Digits needed for the largest row number currently in view.
 fn row_num_digits(vertical_scroll: usize, rows_height: u16, total_rows: usize) -> u16 {
@@ -67,6 +88,8 @@ pub struct DataTable<'a> {
     pub horizontal_scroll: usize,
     pub vertical_scroll: usize,
     pub selected_row: Option<usize>,
+    pub selected_column: Option<usize>,
+    pub selection_mode: SelectionMode,
     pub selected_color: Color,
     pub border_color: Color,
 }
@@ -86,6 +109,8 @@ impl<'a> DataTable<'a> {
             horizontal_scroll: 0,
             vertical_scroll: 0,
             selected_row: None,
+            selected_column: None,
+            selection_mode: SelectionMode::Row,
             selected_color: Color::Rgb(60, 60, 60),
             border_color: Color::DarkGray,
         }
@@ -119,6 +144,12 @@ impl<'a> DataTable<'a> {
 
     pub fn with_selected_row(mut self, row: Option<usize>) -> Self {
         self.selected_row = row;
+        self
+    }
+
+    pub fn with_selection(mut self, mode: SelectionMode, column: usize) -> Self {
+        self.selection_mode = mode;
+        self.selected_column = Some(column);
         self
     }
 
@@ -174,6 +205,28 @@ impl<'a> DataTable<'a> {
         max_scroll_from_widths(&self.all_column_widths(), available_width)
     }
 
+    /// Keep the selected column fully visible, allowing one over-wide column
+    /// to be clipped in terminals too narrow to show it in full.
+    pub fn horizontal_scroll_for_selection(
+        &self,
+        area_width: u16,
+        area_height: u16,
+        selected_column: usize,
+    ) -> usize {
+        let gutter = self.row_num_digits(area_height) + 2 * NUM_SPACES_AFTER_LINE_NUMBER + 1;
+        let available_width = area_width.saturating_sub(gutter);
+        let widths = self.all_column_widths();
+        let max_scroll = max_scroll_from_widths(&widths, available_width);
+        let selected_column = selected_column.min(widths.len().saturating_sub(1));
+        let mut scroll = self.horizontal_scroll.min(max_scroll).min(selected_column);
+        while scroll < max_scroll
+            && selected_column >= scroll + columns_fitting(&widths, scroll, available_width)
+        {
+            scroll += 1;
+        }
+        scroll
+    }
+
     fn calculate_column_widths(
         &self,
         headers: &[String],
@@ -182,12 +235,12 @@ impl<'a> DataTable<'a> {
         let mut widths = Vec::new();
 
         for (col_idx, header) in headers.iter().enumerate() {
-            let mut max_width = header.len();
+            let mut max_width = Span::raw(header.as_str()).width();
 
             // Check content width for this column
             for row in visible_rows {
                 if let Some(cell) = row.get(col_idx) {
-                    max_width = max_width.max(cell.len());
+                    max_width = max_width.max(Span::raw(cell.as_str()).width());
                 }
             }
 
@@ -218,7 +271,7 @@ impl<'a> DataTable<'a> {
     fn render_row_numbers(&self, buf: &mut Buffer, area: Rect, rows: &[Vec<String>]) {
         let mut y = area.y;
 
-        for (row_idx, _) in rows.iter().enumerate() {
+        for (row_idx, _) in rows.iter().take(usize::from(area.height)).enumerate() {
             let actual_row_num = row_idx + self.vertical_scroll + 1;
             let is_selected = self
                 .selected_row
@@ -227,7 +280,7 @@ impl<'a> DataTable<'a> {
             let row_num_formatted = format!("{}", actual_row_num);
             let mut style: ratatui::prelude::Style =
                 ratatui::style::Style::default().fg(Color::DarkGray);
-            if is_selected {
+            if is_selected && self.selection_mode != SelectionMode::Column {
                 style = style
                     .add_modifier(Modifier::BOLD)
                     .add_modifier(Modifier::UNDERLINED);
@@ -252,27 +305,26 @@ impl<'a> DataTable<'a> {
     ) {
         let mut x_offset = x_start;
 
-        for (header, &width) in headers.iter().zip(column_widths) {
+        for (column_idx, (header, &width)) in headers.iter().zip(column_widths).enumerate() {
             if x_offset >= max_width {
                 break;
             }
 
             let effective_width = width.saturating_sub(NUM_SPACES_BETWEEN_COLUMNS);
-            let truncated = if header.len() > effective_width as usize {
-                format!(
-                    "{}...",
-                    &header[..effective_width.saturating_sub(3) as usize]
-                )
-            } else {
-                header.clone()
-            };
+            let truncated = truncate_cell(header, effective_width);
+            let padding = usize::from(width).saturating_sub(Span::raw(truncated.as_str()).width());
 
-            let style = ratatui::style::Style::default()
+            let mut style = ratatui::style::Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD);
-            let span = Span::styled(truncated, style);
+            if self.selection_mode == SelectionMode::Column
+                && self.selected_column == Some(self.horizontal_scroll + column_idx)
+            {
+                style = style.bg(self.selected_color);
+            }
+            let span = Span::styled(format!("{truncated}{}", " ".repeat(padding)), style);
 
-            buf.set_span(x_offset, y, &span, width);
+            buf.set_span(x_offset, y, &span, width.min(max_width - x_offset));
             x_offset += width;
         }
     }
@@ -290,36 +342,34 @@ impl<'a> DataTable<'a> {
     ) {
         let mut x_offset = x_start;
 
-        let style = if is_selected {
-            ratatui::style::Style::default()
-                .bg(self.selected_color)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            ratatui::style::Style::default()
-        };
-
-        for (cell_data, &width) in row_data.iter().zip(column_widths) {
+        for (column_idx, (cell_data, &width)) in row_data.iter().zip(column_widths).enumerate() {
             if x_offset >= max_width {
                 break;
             }
 
-            let effective_width = width.saturating_sub(NUM_SPACES_BETWEEN_COLUMNS);
-            let truncated = if cell_data.chars().count() > effective_width as usize {
-                let truncated_chars: String = cell_data
-                    .chars()
-                    .take(effective_width.saturating_sub(1) as usize)
-                    .collect();
-                format!("{}…", truncated_chars)
-            } else {
-                cell_data.clone()
+            let column_selected = self.selected_column == Some(self.horizontal_scroll + column_idx);
+            let highlighted = match self.selection_mode {
+                SelectionMode::Row => is_selected,
+                SelectionMode::Column => column_selected,
+                SelectionMode::Cell => is_selected && column_selected,
             };
+            let style = if highlighted {
+                ratatui::style::Style::default()
+                    .bg(self.selected_color)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                ratatui::style::Style::default()
+            };
+            let effective_width = width.saturating_sub(NUM_SPACES_BETWEEN_COLUMNS);
+            let truncated = truncate_cell(cell_data, effective_width);
 
             // Pad with spaces to fill the column width
-            let padded = format!("{:width$}", truncated, width = width as usize);
+            let padding = usize::from(width).saturating_sub(Span::raw(truncated.as_str()).width());
+            let padded = format!("{truncated}{}", " ".repeat(padding));
             let span = Span::styled(padded, style);
 
-            buf.set_span(x_offset, y, &span, width);
+            buf.set_span(x_offset, y, &span, width.min(max_width - x_offset));
             x_offset += width;
         }
     }
@@ -343,8 +393,8 @@ impl<'a> DataTable<'a> {
 }
 
 impl<'a> Widget for DataTable<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.area() == 0 {
+    fn render(mut self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height < HEADER_HEIGHT {
             return;
         }
 
@@ -365,6 +415,7 @@ impl<'a> Widget for DataTable<'a> {
         let all_widths = self.all_column_widths();
         let max_scroll = max_scroll_from_widths(&all_widths, available_width);
         let horizontal_scroll = self.horizontal_scroll.min(max_scroll);
+        self.horizontal_scroll = horizontal_scroll;
         let max_visible_columns = columns_fitting(&all_widths, horizontal_scroll, available_width);
 
         // Get visible columns
@@ -394,7 +445,7 @@ impl<'a> Widget for DataTable<'a> {
             .collect();
 
         // Calculate column widths
-        let column_widths = self.calculate_column_widths(&visible_headers, &visible_rows);
+        let column_widths = &all_widths[horizontal_scroll..];
 
         // Header area: header text + separator
         let y_header = area.y;
@@ -417,7 +468,7 @@ impl<'a> Widget for DataTable<'a> {
             row_num_section_width,
             y_header,
             &visible_headers,
-            &column_widths,
+            column_widths,
             area.width,
         );
 
@@ -441,7 +492,7 @@ impl<'a> Widget for DataTable<'a> {
                 row_num_section_width,
                 y_offset,
                 row_data,
-                &column_widths,
+                column_widths,
                 is_selected,
                 area.width,
             );
@@ -462,6 +513,102 @@ impl Renderable for ParquetSampleData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_data() -> ParquetSampleData {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        ParquetSampleData::open(&path, 8).unwrap()
+    }
+
+    #[test]
+    fn highlights_only_the_selected_row_column_or_cell_after_horizontal_scrolling() {
+        let data = sample_data();
+        let selected_color = Color::Rgb(60, 60, 60);
+        for scroll in [0, 1] {
+            // The first two columns are ten terminal cells wide, after a nine-cell gutter.
+            let selected_x = if scroll == 0 { 19 } else { 9 };
+            let other_x = if scroll == 0 { 9 } else { 19 };
+            for mode in [
+                SelectionMode::Row,
+                SelectionMode::Column,
+                SelectionMode::Cell,
+            ] {
+                let area = Rect::new(0, 0, 80, 6);
+                let mut buf = Buffer::empty(area);
+                DataTable::new(&data)
+                    .with_horizontal_scroll(scroll)
+                    .with_selected_row(Some(1))
+                    .with_selection(mode, 1)
+                    .render(area, &mut buf);
+
+                assert_eq!(
+                    buf[(selected_x, 3)].bg,
+                    selected_color,
+                    "{mode:?}, {scroll}"
+                );
+                assert_eq!(buf[(other_x, 2)].bg, Color::Reset);
+                assert_eq!(
+                    buf[(selected_x, 2)].bg == selected_color,
+                    mode == SelectionMode::Column
+                );
+                assert_eq!(
+                    buf[(other_x, 3)].bg == selected_color,
+                    mode == SelectionMode::Row
+                );
+                assert_eq!(
+                    buf[(selected_x, 0)].bg == selected_color,
+                    mode == SelectionMode::Column
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_column_stays_visible_for_variable_widths_and_resizing() {
+        let data = sample_data();
+        let selected_column = data.total_columns - 1;
+        let mut scroll = 0;
+        for width in [100, 40, 20, 80] {
+            scroll = DataTable::new(&data)
+                .with_horizontal_scroll(scroll)
+                .horizontal_scroll_for_selection(width, 6, selected_column);
+            let area = Rect::new(0, 0, width, 6);
+            let mut buf = Buffer::empty(area);
+            DataTable::new(&data)
+                .with_horizontal_scroll(scroll)
+                .with_selected_row(Some(0))
+                .with_selection(SelectionMode::Cell, selected_column)
+                .render(area, &mut buf);
+            assert!((9..width).any(|x| buf[(x, 2)].bg == Color::Rgb(60, 60, 60)));
+        }
+        assert_eq!(
+            DataTable::new(&data)
+                .with_horizontal_scroll(scroll)
+                .horizontal_scroll_for_selection(40, 6, 0),
+            0
+        );
+    }
+
+    #[test]
+    fn selection_handles_unicode_headers_and_tiny_or_empty_tables() {
+        let mut data = sample_data();
+        data.flattened_columns[0] = "資料📊".repeat(20);
+        for width in 0..35 {
+            for height in 0..5 {
+                let area = Rect::new(0, 0, width, height);
+                let mut buf = Buffer::empty(area);
+                DataTable::new(&data)
+                    .with_selection(SelectionMode::Column, 0)
+                    .render(area, &mut buf);
+            }
+        }
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 6));
+        DataTable::new(&ParquetSampleData::default())
+            .with_selection(SelectionMode::Cell, 0)
+            .render(buf.area, &mut buf);
+    }
 
     #[test]
     fn test_columns_fitting_counts_what_fits() {
