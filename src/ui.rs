@@ -165,10 +165,11 @@ impl<'a> AppWidget<'a> {
             return;
         }
 
-        let title_width = self.0.title.len() as u16;
+        let title = self.0.title;
+        let title_width = Line::from(title).width() as u16;
         let [title_area, footer_area] =
             Layout::horizontal([Constraint::Length(title_width), Constraint::Fill(1)]).areas(area);
-        self.0.title.bold().fg(Color::Green).render(title_area, buf);
+        title.bold().fg(Color::Green).render(title_area, buf);
         self.0.tabs().render_instructions(footer_area, buf);
     }
 
@@ -276,6 +277,10 @@ impl<'a> AppWidget<'a> {
             .with_horizontal_scroll(self.0.state().horizontal_offset())
             .with_vertical_scroll(self.0.state().data_vertical_scroll())
             .with_selected_row(Some(self.0.state().vertical_offset()))
+            .with_selection(
+                self.0.state().visualize().selection_mode,
+                self.0.state().visualize().selected_column,
+            )
             .render(area, buf)
     }
 }
@@ -357,7 +362,7 @@ mod tests {
 
     #[test]
     fn long_file_paths_leave_all_tabs_visible() {
-        let tabs = TabManager::new(1, 1, 1, 1);
+        let tabs = TabManager::new(1, 1, 1, 1, 1);
         let paths = [
             format!("{}/data.parquet", "/many/nested/directories".repeat(10)),
             format!("{}/data.parquet", "/資料/📊".repeat(10)),
@@ -378,7 +383,7 @@ mod tests {
 
     #[test]
     fn file_paths_that_fit_are_shown_in_full_using_display_width() {
-        let tabs = TabManager::new(1, 1, 1, 1);
+        let tabs = TabManager::new(1, 1, 1, 1, 1);
         for path in ["data.parquet", "/資料/e\u{301}📊.parquet"] {
             let header = format!(" Visualize   Metadata   Schema   Row Groups  {path}");
             let border = "─".repeat(Line::from(header.as_str()).width());
@@ -398,7 +403,7 @@ mod tests {
 
     #[test]
     fn narrow_headers_prioritize_tabs_and_do_not_panic() {
-        let tabs = TabManager::new(1, 1, 1, 1);
+        let tabs = TabManager::new(1, 1, 1, 1, 1);
         for width in 0..=50 {
             let area = Rect::new(0, 0, width, 3);
             let mut with_path = Buffer::empty(area);

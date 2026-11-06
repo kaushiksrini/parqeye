@@ -1,9 +1,9 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-use ratatui::DefaultTerminal;
+use ratatui::{DefaultTerminal, layout::Size};
 use std::io;
 
 use crate::file::parquet_ctx::ParquetCtx;
-use crate::tabs::visualize::VisualizeState;
+use crate::tabs::visualize::{SelectionMode, VisualizeState};
 use crate::tabs::{EventOutcome, TabManager};
 
 fn visible_data_rows(terminal_height: u16) -> usize {
@@ -91,7 +91,7 @@ impl AppState {
         self.vertical_offset = 0;
         self.tree_scroll_offset = 0;
         self.data_vertical_scroll = 0;
-        self.visualize.cancel_prompt();
+        self.visualize = VisualizeState::default();
     }
 
     pub fn horizontal_offset(&self) -> usize {
@@ -219,6 +219,7 @@ impl<'a> App<'a> {
             file_info.row_groups.num_row_groups(),
             sample_data_rows,
             file_info.metadata.total_property_display_lines(),
+            file_info.sample_data.total_columns,
         );
 
         Self {
@@ -232,38 +233,54 @@ impl<'a> App<'a> {
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
-            // Calculate visible data rows based on terminal size
-            let terminal_size = terminal.size()?;
-            let visible_data_rows = visible_data_rows(terminal_size.height);
-            self.state.set_visible_data_rows(visible_data_rows);
-
-            // Lazily (re)load the row window backing the Visualize table so only a
-            // bounded slice of a large file is ever held in memory.
-            if self.tabs.active_tab().to_string() == "Visualize" {
-                self.parquet_ctx
-                    .sample_data
-                    .ensure_loaded(self.state.data_vertical_scroll(), visible_data_rows);
-            }
-
-            // Bound visualize horizontal scrolling to what fits.
-            // terminal minus the tab header (3 lines) and footer (1 line).
-            let max_horizontal_offset = if self.tabs.active_tab().to_string() == "Visualize" {
-                crate::components::DataTable::new(&self.parquet_ctx.sample_data)
-                    .with_vertical_scroll(self.state.data_vertical_scroll())
-                    .max_horizontal_scroll(
-                        terminal_size.width,
-                        terminal_size.height.saturating_sub(4),
-                    )
-            } else {
-                usize::MAX
-            };
-            self.state.set_max_horizontal_offset(max_horizontal_offset);
+            self.prepare_viewport(terminal.size()?);
 
             let render_view = AppRenderView::from_app(self);
             terminal.draw(|frame| crate::ui::render_app(&render_view, frame))?;
             self.handle_events()?;
         }
         Ok(())
+    }
+
+    fn prepare_viewport(&mut self, terminal_size: Size) {
+        let visible_rows = visible_data_rows(terminal_size.height);
+        self.state.set_visible_data_rows(visible_rows);
+
+        if self.tabs.active_tab().to_string() == "Visualize" {
+            let data = &self.parquet_ctx.sample_data;
+            if self.state.visualize().selection_mode == SelectionMode::Column {
+                self.state.data_vertical_scroll = self
+                    .state
+                    .data_vertical_scroll
+                    .min(data.total_rows.saturating_sub(visible_rows));
+            } else {
+                self.state
+                    .adjust_scroll_to_selection(visible_rows, data.total_rows);
+            }
+            data.ensure_loaded(self.state.data_vertical_scroll(), visible_rows);
+
+            let table = crate::components::DataTable::new(data)
+                .with_vertical_scroll(self.state.data_vertical_scroll())
+                .with_horizontal_scroll(self.state.horizontal_offset());
+            let area_height = terminal_size.height.saturating_sub(4);
+            self.state.set_max_horizontal_offset(
+                table.max_horizontal_scroll(terminal_size.width, area_height),
+            );
+            self.state.visualize_mut().selected_column = self
+                .state
+                .visualize()
+                .selected_column
+                .min(data.total_columns.saturating_sub(1));
+            if self.state.visualize().selection_mode != SelectionMode::Row {
+                self.state.horizontal_offset = table.horizontal_scroll_for_selection(
+                    terminal_size.width,
+                    area_height,
+                    self.state.visualize().selected_column,
+                );
+            }
+        } else {
+            self.state.set_max_horizontal_offset(usize::MAX);
+        }
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
@@ -383,6 +400,86 @@ mod tests {
                     ctx.sample_data.total_rows - rows_on_screen
                 );
             }
+        }
+    }
+
+    #[test]
+    fn visualize_cell_navigation_follows_selection_and_survives_resizing() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let mut ctx = ParquetCtx::from_file(&path).unwrap();
+        // The schema tab can have more entries than the data table (e.g. nested fields).
+        ctx.schema = scroll_test_schema(true);
+        assert_ne!(ctx.schema.column_size(), ctx.sample_data.total_columns);
+        let mut app = App::new(&ctx);
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        app.prepare_viewport(Size::new(60, 10));
+        for _ in 0..2 {
+            app.handle_key_event(KeyEvent::from(KeyCode::Char('v')));
+        }
+        for _ in 0..ctx.sample_data.total_columns + 3 {
+            app.handle_key_event(KeyEvent::from(KeyCode::Right));
+            app.prepare_viewport(Size::new(60, 10));
+        }
+        assert_eq!(
+            app.state.visualize().selected_column,
+            ctx.sample_data.total_columns - 1
+        );
+        assert!(app.state.horizontal_offset() > 0);
+        for _ in 0..6 {
+            app.handle_key_event(KeyEvent::from(KeyCode::Down));
+        }
+
+        for (width, height) in [(60, 10), (30, 8), (100, 13)] {
+            app.prepare_viewport(Size::new(width, height));
+            terminal.backend_mut().resize(width, height);
+            terminal
+                .resize(ratatui::layout::Rect::new(0, 0, width, height))
+                .unwrap();
+            let view = AppRenderView::from_app(&app);
+            terminal
+                .draw(|frame| crate::ui::render_app(&view, frame))
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            let selected_y =
+                5 + (app.state.vertical_offset() - app.state.data_vertical_scroll()) as u16;
+            assert!(
+                (9..width).any(|x| buf[(x, selected_y)].bg == Color::Rgb(60, 60, 60)),
+                "selected cell must be visible at {width}x{height}, row {}, scroll {}, column {}, horizontal {}",
+                app.state.vertical_offset(),
+                app.state.data_vertical_scroll(),
+                app.state.visualize().selected_column,
+                app.state.horizontal_offset(),
+            );
+            let footer: String = (0..width).map(|x| buf[(x, height - 1)].symbol()).collect();
+            assert!(footer.starts_with("parqeye"), "{footer}");
+        }
+        for _ in 0..ctx.sample_data.total_columns {
+            app.handle_key_event(KeyEvent::from(KeyCode::Left));
+            app.prepare_viewport(Size::new(30, 8));
+        }
+        assert_eq!(app.state.visualize().selected_column, 0);
+        assert_eq!(app.state.horizontal_offset(), 0);
+    }
+
+    #[test]
+    fn tab_switch_and_escape_reset_selection_consistently_with_the_viewport() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        for reset_key in [KeyCode::Esc, KeyCode::Tab] {
+            app.handle_key_event(KeyEvent::from(KeyCode::Char('v')));
+            app.handle_key_event(KeyEvent::from(KeyCode::Right));
+            app.handle_key_event(KeyEvent::from(reset_key));
+            assert_eq!(app.state.visualize().selection_mode, SelectionMode::Row);
+            assert_eq!(app.state.visualize().selected_column, 0);
+            assert_eq!(app.state.horizontal_offset(), 0);
+            assert_eq!(app.state.data_vertical_scroll(), 0);
         }
     }
 
