@@ -18,6 +18,7 @@ use std::io;
 pub enum EventOutcome {
     Consumed,
     Bubble,
+    CopyCell,
 }
 
 pub trait Tab {

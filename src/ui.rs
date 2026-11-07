@@ -165,6 +165,18 @@ impl<'a> AppWidget<'a> {
             return;
         }
 
+        if let Some(toast) = self.0.state().toast() {
+            let color = if toast.is_error {
+                Color::Red
+            } else {
+                Color::Green
+            };
+            Line::from(toast.message.as_str())
+                .fg(color)
+                .render(area, buf);
+            return;
+        }
+
         let title = self.0.title;
         let title_width = Line::from(title).width() as u16;
         let [title_area, footer_area] =
