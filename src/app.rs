@@ -1,6 +1,7 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{DefaultTerminal, layout::Size};
 use std::io;
+use std::time::{Duration, Instant};
 
 use crate::file::parquet_ctx::ParquetCtx;
 use crate::tabs::visualize::{SelectionMode, VisualizeState};
@@ -65,6 +66,13 @@ pub struct AppState {
     // on-screen column count. Prevents scrolling past the last visible column.
     max_horizontal_offset: usize,
     visualize: VisualizeState,
+    toast: Option<Toast>,
+}
+
+pub struct Toast {
+    pub message: String,
+    pub is_error: bool,
+    expires_at: Instant,
 }
 
 impl Default for AppState {
@@ -83,6 +91,7 @@ impl AppState {
             visible_data_rows: 20, // Default fallback
             max_horizontal_offset: usize::MAX,
             visualize: VisualizeState::default(),
+            toast: None,
         }
     }
 
@@ -92,6 +101,21 @@ impl AppState {
         self.tree_scroll_offset = 0;
         self.data_vertical_scroll = 0;
         self.visualize = VisualizeState::default();
+        self.toast = None;
+    }
+
+    pub fn show_toast(&mut self, message: impl Into<String>, is_error: bool) {
+        self.toast = Some(Toast {
+            message: message.into(),
+            is_error,
+            expires_at: Instant::now() + Duration::from_secs(2),
+        });
+    }
+
+    pub fn toast(&self) -> Option<&Toast> {
+        self.toast
+            .as_ref()
+            .filter(|toast| toast.expires_at > Instant::now())
     }
 
     pub fn horizontal_offset(&self) -> usize {
@@ -284,6 +308,13 @@ impl<'a> App<'a> {
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
+        // Wake once to clear the toast, then return to blocking reads while idle.
+        if let Some(toast) = &self.state.toast
+            && !event::poll(toast.expires_at.saturating_duration_since(Instant::now()))?
+        {
+            self.state.toast = None;
+            return Ok(());
+        }
         match event::read()? {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 self.handle_key_event(key_event)
@@ -294,13 +325,39 @@ impl<'a> App<'a> {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        self.handle_key_event_with_clipboard(key_event, &mut io::stdout().lock());
+    }
+
+    fn handle_key_event_with_clipboard(
+        &mut self,
+        key_event: KeyEvent,
+        clipboard: &mut impl io::Write,
+    ) {
+        self.state.toast = None;
         let outcome = self
             .tabs
             .active_tab()
             .on_event(key_event, &mut self.state)
             .unwrap();
-        if outcome == EventOutcome::Consumed {
-            return;
+        match outcome {
+            EventOutcome::Consumed => return,
+            EventOutcome::CopyCell => {
+                let result = self.parquet_ctx.sample_data.clipboard_value(
+                    self.state.vertical_offset(),
+                    self.state.visualize().selected_column,
+                );
+                match result {
+                    Ok(value) => match crate::clipboard::copy(&value, clipboard) {
+                        Ok(()) => self
+                            .state
+                            .show_toast(format!("Copied {} chars", value.chars().count()), false),
+                        Err(error) => self.state.show_toast(format!("Copy failed: {error}"), true),
+                    },
+                    Err(_) => self.state.show_toast("Unable to read selected cell", true),
+                }
+                return;
+            }
+            EventOutcome::Bubble => {}
         }
 
         match key_event.code {
@@ -333,6 +390,114 @@ mod tests {
         backend::TestBackend,
         style::{Color, Modifier},
     };
+
+    fn footer(app: &App<'_>) -> (String, Color) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(app), frame))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (
+            (0..80).map(|x| buffer[(x, 9)].symbol()).collect(),
+            buffer[(0, 9)].fg,
+        )
+    }
+
+    #[test]
+    fn yank_copies_the_cursor_cell_and_renders_a_temporary_confirmation() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        for code in [
+            KeyCode::Char('v'),
+            KeyCode::Char('v'),
+            KeyCode::Down,
+            KeyCode::Right,
+        ] {
+            app.handle_key_event(KeyEvent::from(code));
+        }
+        let value = &ctx.sample_data.loaded().rows[1][1];
+        let mut output = Vec::new();
+        app.handle_key_event_with_clipboard(KeyEvent::from(KeyCode::Char('y')), &mut output);
+        assert_eq!(
+            output,
+            format!("\x1b]52;c;{}\x07", STANDARD.encode(value)).into_bytes()
+        );
+        let (text, color) = footer(&app);
+        assert!(text.starts_with(&format!("Copied {} chars", value.chars().count())));
+        assert_eq!(color, Color::Green);
+        assert_eq!(app.state.vertical_offset(), 1);
+        assert_eq!(app.state.visualize().selected_column, 1);
+
+        app.state.toast.as_mut().unwrap().expires_at = Instant::now();
+        assert!(app.state.toast().is_none());
+        assert!(footer(&app).0.starts_with("parqeye"));
+    }
+
+    #[test]
+    fn invalid_yanks_never_write_and_errors_clear_on_navigation() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        let mut output = Vec::new();
+        for mode in [SelectionMode::Row, SelectionMode::Column] {
+            app.state.visualize_mut().selection_mode = mode;
+            app.handle_key_event_with_clipboard(KeyEvent::from(KeyCode::Char('y')), &mut output);
+            assert!(output.is_empty());
+            let (text, color) = footer(&app);
+            assert!(text.starts_with("Yank requires cell mode (press v)"));
+            assert_eq!(color, Color::Red);
+            app.handle_key_event(KeyEvent::from(KeyCode::Down));
+            assert!(app.state.toast().is_none());
+        }
+
+        app.state.visualize_mut().selection_mode = SelectionMode::Cell;
+        app.handle_key_event(KeyEvent::from(KeyCode::Char(':')));
+        app.handle_key_event_with_clipboard(KeyEvent::from(KeyCode::Char('y')), &mut output);
+        assert!(output.is_empty());
+        assert_eq!(app.state.visualize().prompt().unwrap().buffer, "y");
+        app.handle_key_event(KeyEvent::from(KeyCode::Esc));
+        app.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        app.handle_key_event_with_clipboard(KeyEvent::from(KeyCode::Char('y')), &mut output);
+        assert!(output.is_empty());
+        assert!(app.state.toast().is_none());
+    }
+
+    #[test]
+    fn clipboard_write_failures_are_shown_without_exiting() {
+        struct BrokenClipboard;
+        impl io::Write for BrokenClipboard {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("clipboard unavailable"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        app.state.visualize_mut().selection_mode = SelectionMode::Cell;
+        app.handle_key_event_with_clipboard(
+            KeyEvent::from(KeyCode::Char('y')),
+            &mut BrokenClipboard,
+        );
+        let toast = app.state.toast().unwrap();
+        assert!(toast.is_error);
+        assert_eq!(toast.message, "Copy failed: clipboard unavailable");
+        assert!(!app.exit);
+    }
 
     fn assert_last_data_line_is_selected(app: &App<'_>, terminal_height: u16, row_number: usize) {
         let mut terminal = Terminal::new(TestBackend::new(80, terminal_height)).unwrap();

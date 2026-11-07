@@ -132,6 +132,36 @@ impl ParquetSampleData {
         self.window.borrow()
     }
 
+    /// Fetch the original value, since formatted window rows can abbreviate lists
+    /// and binary data. Project and slice the scan to just the selected cell.
+    pub fn clipboard_value(
+        &self,
+        row: usize,
+        column: usize,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        if row >= self.total_rows || column >= self.total_columns {
+            return Err("no cell selected".into());
+        }
+        let name = &self.flattened_columns[column];
+        let file_path = &self.file_path;
+        catch_polars_panic(|| {
+            let df = LazyFrame::scan_parquet(PlRefPath::new(file_path), Default::default())?
+                .select([col(name.as_str())])
+                .slice(row as i64, 1)
+                .collect()?;
+            let value = df.column(name)?.as_materialized_series().get(0)?;
+            Ok(match &value {
+                AnyValue::List(_)
+                | AnyValue::Array(_, _)
+                | AnyValue::Struct(..)
+                | AnyValue::StructOwned(_) => serde_json::to_string(&cell_json(value)?)?,
+                AnyValue::Binary(bytes) => hex(bytes),
+                AnyValue::BinaryOwned(bytes) => hex(bytes),
+                _ => format_cell(&value),
+            })
+        })
+    }
+
     fn flatten_struct_columns(df: DataFrame) -> DataFrame {
         // Struct columns are currently displayed with their string representation.
         df
@@ -139,11 +169,67 @@ impl ParquetSampleData {
 
     fn get_value_as_string(col: &Series, row_idx: usize) -> String {
         match col.get(row_idx) {
-            Ok(any_value) if any_value.is_null() => "NULL".to_string(),
-            Ok(any_value) => format!("{any_value}"),
+            Ok(any_value) => format_cell(&any_value),
             Err(_) => "NULL".to_string(),
         }
     }
+}
+
+fn format_cell(value: &AnyValue<'_>) -> String {
+    match value {
+        AnyValue::Null => "NULL".to_string(),
+        AnyValue::String(value) => (*value).to_string(),
+        AnyValue::StringOwned(value) => value.to_string(),
+        _ => value.to_string(),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(result, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    result
+}
+
+fn cell_json(value: AnyValue<'_>) -> PolarsResult<serde_json::Value> {
+    use serde_json::Value;
+    Ok(match value {
+        AnyValue::Null => Value::Null,
+        AnyValue::Boolean(value) => Value::Bool(value),
+        AnyValue::List(series) | AnyValue::Array(series, _) => Value::Array(
+            (0..series.len())
+                .map(|i| cell_json(series.get(i)?))
+                .collect::<PolarsResult<_>>()?,
+        ),
+        value @ AnyValue::Struct(..) => cell_json(value.into_static())?,
+        AnyValue::StructOwned(fields) => {
+            let (values, fields) = *fields;
+            Value::Object(
+                values
+                    .into_iter()
+                    .zip(fields)
+                    .map(|(value, field)| Ok((field.name.to_string(), cell_json(value)?)))
+                    .collect::<PolarsResult<_>>()?,
+            )
+        }
+        AnyValue::Binary(bytes) => Value::String(hex(bytes)),
+        AnyValue::BinaryOwned(bytes) => Value::String(hex(&bytes)),
+        AnyValue::UInt8(value) => value.into(),
+        AnyValue::UInt16(value) => value.into(),
+        AnyValue::UInt32(value) => value.into(),
+        AnyValue::UInt64(value) => value.into(),
+        AnyValue::Int8(value) => value.into(),
+        AnyValue::Int16(value) => value.into(),
+        AnyValue::Int32(value) => value.into(),
+        AnyValue::Int64(value) => value.into(),
+        AnyValue::Float32(value) if value.is_finite() => value.into(),
+        AnyValue::Float64(value) if value.is_finite() => value.into(),
+        // Temporal values, decimals, wide integers and non-finite floats keep
+        // their text representation rather than losing precision or becoming null.
+        value => Value::String(format_cell(&value)),
+    })
 }
 
 fn catch_polars_panic<T>(
@@ -220,6 +306,97 @@ mod tests {
         let win = data.loaded();
         let rel = 6000 - win.start;
         assert_eq!(&win.rows[rel..rel + 10], &direct[..]);
+    }
+
+    #[test]
+    fn clipboard_reads_a_cell_outside_the_loaded_window() {
+        let data = ParquetSampleData::open(&wide_file(), 7300).unwrap();
+        let (direct, _) = ParquetSampleData::load(&wide_file(), 6000, 1).unwrap();
+        assert_eq!(data.clipboard_value(6000, 0).unwrap(), direct[0][0]);
+        assert_eq!(data.loaded().start, 0);
+        assert!(data.clipboard_value(7300, 0).is_err());
+        assert!(data.clipboard_value(0, data.total_columns).is_err());
+        assert!(ParquetSampleData::default().clipboard_value(0, 0).is_err());
+    }
+
+    #[test]
+    fn clipboard_preserves_full_strings_lists_structs_binary_and_nulls() {
+        use arrow::array::{
+            ArrayRef, BinaryArray, BooleanArray, ListArray, RecordBatch, StringArray, StructArray,
+        };
+        use arrow::datatypes::{Field, Int32Type, Schema};
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+
+        let text = format!("{}\n\t\"quoted\"", "資料".repeat(100));
+        let values: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec![Some(text.as_str()), Some("")])),
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
+                Some((0..30).map(Some)),
+                None,
+            ])),
+            Arc::new(BinaryArray::from_opt_vec(vec![
+                Some(&[0, 1, 127, 255]),
+                None,
+            ])),
+            Arc::new(StructArray::from(vec![
+                (
+                    Arc::new(Field::new(
+                        "flag",
+                        arrow::datatypes::DataType::Boolean,
+                        true,
+                    )),
+                    Arc::new(BooleanArray::from(vec![Some(true), Some(false)])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("text", arrow::datatypes::DataType::Utf8, true)),
+                    Arc::new(StringArray::from(vec![Some("a\"\\\n資料"), None])) as ArrayRef,
+                ),
+            ])),
+        ];
+        let schema = Arc::new(Schema::new(
+            values
+                .iter()
+                .enumerate()
+                .map(|(i, array)| Field::new(format!("cell.{i}"), array.data_type().clone(), true))
+                .collect::<Vec<_>>(),
+        ));
+        let batch = RecordBatch::try_new(schema.clone(), values).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("parqeye_clipboard_{}.parquet", std::process::id()));
+        let mut writer =
+            ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let data = ParquetSampleData::open(path.to_str().unwrap(), 2).unwrap();
+        assert_eq!(data.clipboard_value(0, 0).unwrap(), text);
+        assert_eq!(data.clipboard_value(1, 0).unwrap(), "");
+        let list: serde_json::Value =
+            serde_json::from_str(&data.clipboard_value(0, 1).unwrap()).unwrap();
+        assert_eq!(list, serde_json::json!((0..30).collect::<Vec<_>>()));
+        assert_eq!(data.clipboard_value(1, 1).unwrap(), "NULL");
+        assert_eq!(data.clipboard_value(0, 2).unwrap(), "00017fff");
+        assert_eq!(data.clipboard_value(1, 2).unwrap(), "NULL");
+        let record: serde_json::Value =
+            serde_json::from_str(&data.clipboard_value(0, 3).unwrap()).unwrap();
+        assert_eq!(
+            record,
+            serde_json::json!({"flag": true, "text": "a\"\\\n資料"})
+        );
+        let record: serde_json::Value =
+            serde_json::from_str(&data.clipboard_value(1, 3).unwrap()).unwrap();
+        assert_eq!(record, serde_json::json!({"flag": false, "text": null}));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn clipboard_serializes_parquet_maps_as_json() {
+        let path = test_data_path("nested_maps.snappy.parquet");
+        let data = ParquetSampleData::open(&path, 6).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&data.clipboard_value(0, 0).unwrap()).unwrap();
+        assert!(value.is_array());
     }
 
     fn write_geoarrow_wkb_file() -> std::path::PathBuf {
