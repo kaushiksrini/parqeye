@@ -2154,6 +2154,7 @@ name = "parqeye"
 version = "0.2.0"
 dependencies = [
  "arrow",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "crossterm 0.29.0",
