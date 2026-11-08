@@ -544,15 +544,15 @@ mod tests {
 
             // Arrow, page and jump navigation must all reach the final file row.
             for key in [
-                KeyCode::Down,
-                KeyCode::PageDown,
-                KeyCode::Char('d'),
-                KeyCode::End,
-                KeyCode::Char('G'),
+                KeyEvent::from(KeyCode::Down),
+                KeyEvent::from(KeyCode::PageDown),
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+                KeyEvent::from(KeyCode::End),
+                KeyEvent::from(KeyCode::Char('G')),
             ] {
                 app.state.reset();
                 for _ in 0..ctx.sample_data.total_rows {
-                    app.handle_key_event(KeyEvent::from(key));
+                    app.handle_key_event(key);
                 }
                 assert_eq!(app.state.vertical_offset(), ctx.sample_data.total_rows - 1);
                 assert_last_data_line_is_selected(
