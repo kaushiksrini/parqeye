@@ -109,22 +109,28 @@ mod tests {
     fn test_visualize_page_shortcuts_match_page_keys() {
         let tab = VisualizeTab::new().with_max_rows(12);
 
-        for (down, up) in [('d', 'u'), ('D', 'U')] {
+        for mode in [
+            visualize::SelectionMode::Row,
+            visualize::SelectionMode::Column,
+            visualize::SelectionMode::Cell,
+        ] {
             let mut state = AppState::new();
             state.set_visible_data_rows(5);
+            state.visualize_mut().selection_mode = mode;
             let mut page_state = AppState::new();
             page_state.set_visible_data_rows(5);
+            page_state.visualize_mut().selection_mode = mode;
 
             for (shortcut, key) in [
-                (down, KeyCode::PageDown),
-                (down, KeyCode::PageDown),
-                (down, KeyCode::PageDown),
-                (up, KeyCode::PageUp),
-                (up, KeyCode::PageUp),
-                (up, KeyCode::PageUp),
+                ('d', KeyCode::PageDown),
+                ('d', KeyCode::PageDown),
+                ('d', KeyCode::PageDown),
+                ('u', KeyCode::PageUp),
+                ('u', KeyCode::PageUp),
+                ('u', KeyCode::PageUp),
             ] {
                 tab.on_event(
-                    KeyEvent::new(KeyCode::Char(shortcut), KeyModifiers::NONE),
+                    KeyEvent::new(KeyCode::Char(shortcut), KeyModifiers::CONTROL),
                     &mut state,
                 )
                 .unwrap();
@@ -136,6 +142,45 @@ mod tests {
                     state.data_vertical_scroll(),
                     page_state.data_vertical_scroll()
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn test_visualize_plain_and_alt_page_letters_leave_navigation_unchanged() {
+        let tab = VisualizeTab::new().with_max_rows(12);
+
+        for mode in [
+            visualize::SelectionMode::Row,
+            visualize::SelectionMode::Column,
+            visualize::SelectionMode::Cell,
+        ] {
+            let mut state = AppState::new();
+            state.set_visible_data_rows(3);
+            state.jump_to_row(6, 3, 12);
+            state.visualize_mut().selection_mode = mode;
+            let selected_row = state.vertical_offset();
+            let scroll = state.data_vertical_scroll();
+            let selection = state.visualize().clone();
+
+            for (letter, modifiers) in [
+                ('u', KeyModifiers::NONE),
+                ('d', KeyModifiers::NONE),
+                ('U', KeyModifiers::SHIFT),
+                ('D', KeyModifiers::SHIFT),
+                ('u', KeyModifiers::ALT),
+                ('d', KeyModifiers::ALT),
+                ('u', KeyModifiers::CONTROL | KeyModifiers::ALT),
+                ('d', KeyModifiers::CONTROL | KeyModifiers::ALT),
+            ] {
+                assert_eq!(
+                    tab.on_event(KeyEvent::new(KeyCode::Char(letter), modifiers), &mut state)
+                        .unwrap(),
+                    EventOutcome::Bubble
+                );
+                assert_eq!(state.vertical_offset(), selected_row);
+                assert_eq!(state.data_vertical_scroll(), scroll);
+                assert_eq!(state.visualize(), &selection);
             }
         }
     }

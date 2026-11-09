@@ -234,8 +234,11 @@ impl Tab for VisualizeTab {
                 }
                 EventOutcome::Consumed
             }
-            // Page navigation (u/d keys or PageUp/PageDown)
-            KeyCode::Char('u') | KeyCode::Char('U') | KeyCode::PageUp => {
+            // Page navigation (Ctrl-u/Ctrl-d or PageUp/PageDown)
+            KeyCode::Char('u') | KeyCode::PageUp
+                if key_event.code == KeyCode::PageUp
+                    || key_event.modifiers == KeyModifiers::CONTROL =>
+            {
                 if selection_mode == SelectionMode::Column {
                     state.set_data_vertical_scroll(
                         state.data_vertical_scroll().saturating_sub(visible_rows),
@@ -245,7 +248,10 @@ impl Tab for VisualizeTab {
                 }
                 EventOutcome::Consumed
             }
-            KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::PageDown => {
+            KeyCode::Char('d') | KeyCode::PageDown
+                if key_event.code == KeyCode::PageDown
+                    || key_event.modifiers == KeyModifiers::CONTROL =>
+            {
                 if selection_mode == SelectionMode::Column {
                     state.set_data_vertical_scroll(
                         state
@@ -315,9 +321,9 @@ impl Tab for VisualizeTab {
             " : ".into(),
             "Column".into(),
             " | ".white(),
-            "u".green(),
+            "Ctrl-u".green(),
             "/".white(),
-            "d".blue(),
+            "Ctrl-d".blue(),
             " : ".into(),
             "Page".into(),
             " | ".white(),
