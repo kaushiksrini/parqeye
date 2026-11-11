@@ -75,16 +75,6 @@ impl VisualizeState {
         self.column_name_scroll = 0;
     }
 
-    /// Lines above the table shared by rendering and viewport calculations.
-    pub fn header_lines(&self) -> u16 {
-        u16::from(self.column_filter.is_some())
-            + u16::from(self.selection_mode != SelectionMode::Row)
-            + u16::from(
-                self.prompt()
-                    .is_some_and(|prompt| prompt.kind == PromptKind::Columns),
-            )
-    }
-
     pub fn cancel_prompt(&mut self) {
         self.mode = VisualizeMode::Normal;
     }

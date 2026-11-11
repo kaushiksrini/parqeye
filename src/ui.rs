@@ -4,11 +4,12 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     prelude::{Color, Position},
     style::{Style, Stylize},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap},
 };
 
 use crate::app::AppRenderView;
+use crate::components::data_table::truncate_cell;
 use crate::components::{
     DataTable, FileSchemaTable, RowGroupColumnMetadataComponent, RowGroupMetadata,
     RowGroupProgressBar, SchemaTreeComponent, ScrollbarComponent,
@@ -19,11 +20,81 @@ use crate::tabs::{
     visualize::{CommandPrompt, PromptKind, SelectionMode},
 };
 
-fn prompt_prefix(prompt: &CommandPrompt, width: u16) -> &str {
+fn prompt_prefix(prompt: &CommandPrompt, width: u16) -> &'static str {
     match prompt.kind {
-        PromptKind::Columns if width >= 42 => "* Columns (regex, ignore case): ",
+        PromptKind::Columns if width >= 72 => "* Columns (regex, ignore case): ",
+        PromptKind::Columns if width >= 40 => "* regex: ",
         PromptKind::Columns => "*",
         PromptKind::GoToRow => ":",
+    }
+}
+
+struct PromptLayout<'a> {
+    prefix: &'static str,
+    input: &'a str,
+    edit_area: Rect,
+    input_area: Rect,
+    status: Line<'a>,
+    status_area: Rect,
+    cursor: Position,
+}
+
+/// Rendering and cursor placement must use the same input width after reserving
+/// space for feedback on the existing single footer row.
+fn prompt_layout(prompt: &CommandPrompt, total_columns: usize, area: Rect) -> PromptLayout<'_> {
+    let status = if let Some(error) = &prompt.error {
+        Line::from(error.as_str()).red()
+    } else if prompt.kind == PromptKind::Columns {
+        let count = prompt.column_matches.as_ref().map_or(0, Vec::len);
+        let message = if prompt.buffer.is_empty() {
+            format!("{count}/{total_columns} | a|b, ^a$")
+        } else {
+            format!("{count}/{total_columns} columns")
+        };
+        Line::from(message).cyan()
+    } else {
+        Line::default()
+    };
+    let status_width = if status.width() == 0 {
+        0
+    } else {
+        usize::from(area.width / 3).min(status.width() + 3) as u16
+    };
+    let status = if status_width >= 4 {
+        let style = status.style;
+        let mut spans = vec![" | ".dim()];
+        spans.extend(status.spans);
+        Line::from(spans).style(style)
+    } else {
+        status
+    };
+    let prefix = prompt_prefix(prompt, area.width);
+    let edit_area = Rect::new(
+        area.x,
+        area.y,
+        area.width - status_width,
+        area.height.min(1),
+    );
+    let prefix_width = (prefix.len() as u16).min(edit_area.width);
+    let input_area = Rect::new(
+        edit_area.x + prefix_width,
+        area.y,
+        edit_area.width - prefix_width,
+        edit_area.height,
+    );
+    let (input, offset) = prompt.visible_input(input_area.width);
+    let cursor = Position::new(
+        (input_area.x + offset).min(area.right().saturating_sub(1)),
+        area.y,
+    );
+    PromptLayout {
+        prefix,
+        input,
+        edit_area,
+        input_area,
+        status,
+        cursor,
+        status_area: Rect::new(edit_area.right(), area.y, status_width, edit_area.height),
     }
 }
 
@@ -38,15 +109,10 @@ where
         && area.height > 0
         && let Some(prompt) = app.state().visualize().prompt()
     {
-        let prefix_width = prompt_prefix(prompt, area.width).len() as u16;
-        let (_, buffer_cursor_width) =
-            prompt.visible_input(area.width.saturating_sub(prefix_width));
-        let cursor_x = area
-            .x
-            .saturating_add(prefix_width)
-            .saturating_add(buffer_cursor_width)
-            .min(area.right().saturating_sub(1));
-        frame.set_cursor_position(Position::new(cursor_x, area.bottom().saturating_sub(1)));
+        let footer = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+        frame.set_cursor_position(
+            prompt_layout(prompt, app.parquet_ctx.sample_data.total_columns, footer).cursor,
+        );
     }
 }
 
@@ -166,15 +232,10 @@ impl<'a> AppWidget<'a> {
 
     fn render_footer_view(&self, area: Rect, buf: &mut Buffer) {
         if let Some(prompt) = self.0.state().visualize().prompt() {
-            let prefix = prompt_prefix(prompt, area.width);
-            let (input, _) = prompt.visible_input(area.width.saturating_sub(prefix.len() as u16));
-            let mut spans = vec![prefix.green(), input.into()];
-            if let Some(error) = &prompt.error
-                && prompt.kind != PromptKind::Columns
-            {
-                spans.extend(["  ".into(), error.clone().red()]);
-            }
-            Line::from(spans).render(area, buf);
+            let layout = prompt_layout(prompt, self.0.parquet_ctx.sample_data.total_columns, area);
+            layout.prefix.green().render(layout.edit_area, buf);
+            Line::from(layout.input).render(layout.input_area, buf);
+            layout.status.render(layout.status_area, buf);
             return;
         }
 
@@ -190,12 +251,80 @@ impl<'a> AppWidget<'a> {
             return;
         }
 
+        if self.0.tabs().active_tab().to_string() == "Visualize"
+            && let Some(context) = self.visualize_footer(area.width)
+        {
+            context.render(area, buf);
+            return;
+        }
+
         let title = self.0.title;
         let title_width = Line::from(title).width() as u16;
         let [title_area, footer_area] =
             Layout::horizontal([Constraint::Length(title_width), Constraint::Fill(1)]).areas(area);
         title.bold().fg(Color::Green).render(title_area, buf);
         self.0.tabs().render_instructions(footer_area, buf);
+    }
+
+    fn visualize_footer(&self, width: u16) -> Option<Line<'_>> {
+        let visualize = self.0.state().visualize();
+        let data = &self.0.parquet_ctx.sample_data;
+        let name = (visualize.selection_mode != SelectionMode::Row)
+            .then(|| visualize.source_column(visualize.selected_column))
+            .flatten()
+            .and_then(|index| data.flattened_columns.get(index));
+        if visualize.column_filter.is_none() && name.is_none() {
+            return None;
+        }
+        let mut remaining = width;
+        let mut spans = Vec::new();
+        if visualize.column_filter.is_some() {
+            let count = format!(
+                "Columns: {}/{}",
+                visualize.column_count(data.total_columns),
+                data.total_columns
+            );
+            remaining = remaining.saturating_sub(Span::raw(&count).width() as u16);
+            spans.push(count.cyan());
+        }
+        if let Some(name) = name {
+            if !spans.is_empty() {
+                spans.push(" | ".into());
+                remaining = remaining.saturating_sub(3);
+            }
+            let start = name
+                .char_indices()
+                .nth(visualize.column_name_scroll)
+                .map_or(name.len(), |(index, _)| index);
+            // Leave room for the expression when both it and the name fit.
+            let expression_width = if visualize.column_filter.is_some() && remaining >= 24 {
+                remaining / 3
+            } else {
+                0
+            };
+            let text = truncate_cell(
+                &name[start..],
+                remaining.saturating_sub(expression_width + 5),
+            );
+            remaining = remaining.saturating_sub(5 + Span::raw(text.as_ref()).width() as u16);
+            spans.extend([
+                "Col: ".yellow(),
+                Span::styled(text, Style::default().fg(Color::Yellow)),
+            ]);
+            if expression_width == 0 {
+                return Some(Line::from(spans));
+            }
+        }
+        if let Some(expression) = &visualize.column_filter {
+            spans.extend([
+                " | * ".cyan(),
+                Span::styled(
+                    truncate_cell(expression, remaining.saturating_sub(5)),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]);
+        }
+        Some(Line::from(spans))
     }
 
     fn render_metadata_view(&self, area: Rect, buf: &mut Buffer) {
@@ -300,53 +429,6 @@ impl<'a> AppWidget<'a> {
 
         let visualize = self.0.state().visualize();
         let data = &self.0.parquet_ctx.sample_data;
-        let column_prompt = visualize
-            .prompt()
-            .filter(|prompt| prompt.kind == PromptKind::Columns);
-        let [status_area, detail_area, hint_area, table_area] = Layout::vertical([
-            Constraint::Length(u16::from(visualize.column_filter.is_some())),
-            Constraint::Length(u16::from(visualize.selection_mode != SelectionMode::Row)),
-            Constraint::Length(u16::from(column_prompt.is_some())),
-            Constraint::Fill(1),
-        ])
-        .areas(area);
-        if let Some(expression) = &visualize.column_filter {
-            Line::from(format!(
-                "Columns: {}/{} | regex (ignore case): {expression}",
-                visualize.column_count(data.total_columns),
-                data.total_columns
-            ))
-            .cyan()
-            .render(status_area, buf);
-        }
-        if visualize.selection_mode != SelectionMode::Row {
-            let name = visualize
-                .source_column(visualize.selected_column)
-                .and_then(|index| data.flattened_columns.get(index));
-            if let Some(name) = name {
-                let start = name
-                    .char_indices()
-                    .nth(visualize.column_name_scroll)
-                    .map_or(name.len(), |(index, _)| index);
-                Line::from(format!("Col: {}", &name[start..]))
-                    .yellow()
-                    .render(detail_area, buf);
-            }
-        }
-        if let Some(prompt) = column_prompt {
-            let hint = if let Some(error) = &prompt.error {
-                Line::from(error.as_str()).red()
-            } else {
-                Line::from(format!(
-                    "{}/{} columns | contains: a|b  exact: ^(a|b)$  prefix: ^(a|b)",
-                    prompt.column_matches.as_ref().map_or(0, Vec::len),
-                    data.total_columns
-                ))
-                .cyan()
-            };
-            hint.render(hint_area, buf);
-        }
-
         DataTable::new(data)
             .with_width_cache(&visualize.column_widths)
             .with_projection(visualize.projection())
@@ -357,7 +439,7 @@ impl<'a> AppWidget<'a> {
                 self.0.state().visualize().selection_mode,
                 self.0.state().visualize().selected_column,
             )
-            .render(table_area, buf)
+            .render(area, buf)
     }
 }
 
@@ -435,6 +517,38 @@ impl<'a> Widget for AppWidget<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_feedback_leaves_space_for_input_and_its_cursor() {
+        for kind in [PromptKind::Columns, PromptKind::GoToRow] {
+            let mut prompt = CommandPrompt::new(kind);
+            prompt.buffer = "資料_customer_".repeat(30);
+            prompt.column_matches = Some(vec![0, 2]);
+            for error in [None, Some("Invalid regex: unclosed group".to_string())] {
+                prompt.error = error;
+                for cursor in [0, "資料_".len(), prompt.buffer.len()] {
+                    prompt.cursor = cursor;
+                    for width in 0..=100 {
+                        let area = Rect::new(2, 9, width, 1);
+                        let layout = prompt_layout(&prompt, 50_000, area);
+                        assert!(layout.status_area.width <= width / 3);
+                        assert_eq!(layout.edit_area.right(), layout.status_area.x);
+                        assert_eq!(layout.status_area.right(), area.right());
+                        assert_eq!(layout.cursor.y, area.y);
+                        if layout.input_area.width > 0 {
+                            assert!(layout.cursor.x >= layout.input_area.x);
+                            assert!(layout.cursor.x < layout.input_area.right());
+                            let start = prompt.buffer.len() - layout.input.len();
+                            assert_eq!(
+                                Span::raw(&prompt.buffer[start..cursor]).width(),
+                                usize::from(layout.cursor.x - layout.input_area.x),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn long_file_paths_leave_all_tabs_visible() {

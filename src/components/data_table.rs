@@ -57,7 +57,7 @@ fn capped_width(text: &str, limit: usize) -> usize {
 }
 
 /// Truncate by terminal display width without splitting UTF-8 characters.
-fn truncate_cell(text: &str, width: u16) -> Cow<'_, str> {
+pub(crate) fn truncate_cell(text: &str, width: u16) -> Cow<'_, str> {
     if width == 0 {
         return Cow::Borrowed("");
     }
