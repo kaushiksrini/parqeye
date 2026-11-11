@@ -14,7 +14,18 @@ use crate::components::{
     RowGroupProgressBar, SchemaTreeComponent, ScrollbarComponent,
 };
 use crate::file::Renderable;
-use crate::tabs::TabManager;
+use crate::tabs::{
+    TabManager,
+    visualize::{CommandPrompt, PromptKind, SelectionMode},
+};
+
+fn prompt_prefix(prompt: &CommandPrompt, width: u16) -> &str {
+    match prompt.kind {
+        PromptKind::Columns if width >= 42 => "* Columns (regex, ignore case): ",
+        PromptKind::Columns => "*",
+        PromptKind::GoToRow => ":",
+    }
+}
 
 pub fn render_app<'a, 'b>(app: &'b AppRenderView<'a>, frame: &mut Frame)
 where
@@ -27,11 +38,12 @@ where
         && area.height > 0
         && let Some(prompt) = app.state().visualize().prompt()
     {
-        let buffer_cursor_width = prompt.buffer[..prompt.cursor].chars().count() as u16;
-        // The prompt prefix precedes the buffer at the start of the footer.
+        let prefix_width = prompt_prefix(prompt, area.width).len() as u16;
+        let (_, buffer_cursor_width) =
+            prompt.visible_input(area.width.saturating_sub(prefix_width));
         let cursor_x = area
             .x
-            .saturating_add(1)
+            .saturating_add(prefix_width)
             .saturating_add(buffer_cursor_width)
             .min(area.right().saturating_sub(1));
         frame.set_cursor_position(Position::new(cursor_x, area.bottom().saturating_sub(1)));
@@ -154,11 +166,12 @@ impl<'a> AppWidget<'a> {
 
     fn render_footer_view(&self, area: Rect, buf: &mut Buffer) {
         if let Some(prompt) = self.0.state().visualize().prompt() {
-            let mut spans = vec![
-                prompt.kind.prefix().to_string().green(),
-                prompt.buffer.clone().into(),
-            ];
-            if let Some(error) = &prompt.error {
+            let prefix = prompt_prefix(prompt, area.width);
+            let (input, _) = prompt.visible_input(area.width.saturating_sub(prefix.len() as u16));
+            let mut spans = vec![prefix.green(), input.into()];
+            if let Some(error) = &prompt.error
+                && prompt.kind != PromptKind::Columns
+            {
                 spans.extend(["  ".into(), error.clone().red()]);
             }
             Line::from(spans).render(area, buf);
@@ -285,7 +298,58 @@ impl<'a> AppWidget<'a> {
             return render_sample_data_error(error, area, buf);
         }
 
-        DataTable::new(&self.0.parquet_ctx.sample_data)
+        let visualize = self.0.state().visualize();
+        let data = &self.0.parquet_ctx.sample_data;
+        let column_prompt = visualize
+            .prompt()
+            .filter(|prompt| prompt.kind == PromptKind::Columns);
+        let [status_area, detail_area, hint_area, table_area] = Layout::vertical([
+            Constraint::Length(u16::from(visualize.column_filter.is_some())),
+            Constraint::Length(u16::from(visualize.selection_mode != SelectionMode::Row)),
+            Constraint::Length(u16::from(column_prompt.is_some())),
+            Constraint::Fill(1),
+        ])
+        .areas(area);
+        if let Some(expression) = &visualize.column_filter {
+            Line::from(format!(
+                "Columns: {}/{} | regex (ignore case): {expression}",
+                visualize.column_count(data.total_columns),
+                data.total_columns
+            ))
+            .cyan()
+            .render(status_area, buf);
+        }
+        if visualize.selection_mode != SelectionMode::Row {
+            let name = visualize
+                .source_column(visualize.selected_column)
+                .and_then(|index| data.flattened_columns.get(index));
+            if let Some(name) = name {
+                let start = name
+                    .char_indices()
+                    .nth(visualize.column_name_scroll)
+                    .map_or(name.len(), |(index, _)| index);
+                Line::from(format!("Col: {}", &name[start..]))
+                    .yellow()
+                    .render(detail_area, buf);
+            }
+        }
+        if let Some(prompt) = column_prompt {
+            let hint = if let Some(error) = &prompt.error {
+                Line::from(error.as_str()).red()
+            } else {
+                Line::from(format!(
+                    "{}/{} columns | contains: a|b  exact: ^(a|b)$  prefix: ^(a|b)",
+                    prompt.column_matches.as_ref().map_or(0, Vec::len),
+                    data.total_columns
+                ))
+                .cyan()
+            };
+            hint.render(hint_area, buf);
+        }
+
+        DataTable::new(data)
+            .with_width_cache(&visualize.column_widths)
+            .with_projection(visualize.projection())
             .with_horizontal_scroll(self.0.state().horizontal_offset())
             .with_vertical_scroll(self.0.state().data_vertical_scroll())
             .with_selected_row(Some(self.0.state().vertical_offset()))
@@ -293,7 +357,7 @@ impl<'a> AppWidget<'a> {
                 self.0.state().visualize().selection_mode,
                 self.0.state().visualize().selected_column,
             )
-            .render(area, buf)
+            .render(table_area, buf)
     }
 }
 
@@ -374,7 +438,7 @@ mod tests {
 
     #[test]
     fn long_file_paths_leave_all_tabs_visible() {
-        let tabs = TabManager::new(1, 1, 1, 1, 1);
+        let tabs = TabManager::new(1, 1, 1, 1, &["id".into()]);
         let paths = [
             format!("{}/data.parquet", "/many/nested/directories".repeat(10)),
             format!("{}/data.parquet", "/資料/📊".repeat(10)),
@@ -395,7 +459,7 @@ mod tests {
 
     #[test]
     fn file_paths_that_fit_are_shown_in_full_using_display_width() {
-        let tabs = TabManager::new(1, 1, 1, 1, 1);
+        let tabs = TabManager::new(1, 1, 1, 1, &["id".into()]);
         for path in ["data.parquet", "/資料/e\u{301}📊.parquet"] {
             let header = format!(" Visualize   Metadata   Schema   Row Groups  {path}");
             let border = "─".repeat(Line::from(header.as_str()).width());
@@ -415,7 +479,7 @@ mod tests {
 
     #[test]
     fn narrow_headers_prioritize_tabs_and_do_not_panic() {
-        let tabs = TabManager::new(1, 1, 1, 1, 1);
+        let tabs = TabManager::new(1, 1, 1, 1, &["id".into()]);
         for width in 0..=50 {
             let area = Rect::new(0, 0, width, 3);
             let mut with_path = Buffer::empty(area);
