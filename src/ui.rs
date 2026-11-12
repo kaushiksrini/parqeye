@@ -46,12 +46,7 @@ fn prompt_layout(prompt: &CommandPrompt, total_columns: usize, area: Rect) -> Pr
         Line::from(error.as_str()).red()
     } else if prompt.kind == PromptKind::Columns {
         let count = prompt.column_matches.as_ref().map_or(0, Vec::len);
-        let message = if prompt.buffer.is_empty() {
-            format!("{count}/{total_columns} | a|b, ^a$")
-        } else {
-            format!("{count}/{total_columns} columns")
-        };
-        Line::from(message).cyan()
+        Line::from(format!("{count}/{total_columns} columns")).cyan()
     } else {
         Line::default()
     };
@@ -234,7 +229,13 @@ impl<'a> AppWidget<'a> {
         if let Some(prompt) = self.0.state().visualize().prompt() {
             let layout = prompt_layout(prompt, self.0.parquet_ctx.sample_data.total_columns, area);
             layout.prefix.green().render(layout.edit_area, buf);
-            Line::from(layout.input).render(layout.input_area, buf);
+            if prompt.kind == PromptKind::Columns && prompt.buffer.is_empty() {
+                "e.g. ^exact_name$, a|^pre|suffix$"
+                    .dim()
+                    .render(layout.input_area, buf);
+            } else {
+                Line::from(layout.input).render(layout.input_area, buf);
+            }
             layout.status.render(layout.status_area, buf);
             return;
         }

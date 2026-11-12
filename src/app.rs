@@ -736,7 +736,7 @@ mod tests {
             }
 
             app.handle_key_event(KeyCode::Char('*').into());
-            assert_eq!(render_table(&mut app, "a|b"), table);
+            assert_eq!(render_table(&mut app, "^exact_name$"), table);
             app.handle_key_event(KeyCode::Char('[').into());
             assert_eq!(render_table(&mut app, "Invalid regex"), table);
             app.handle_key_event(KeyCode::Esc.into());
