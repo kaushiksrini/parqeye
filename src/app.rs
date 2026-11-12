@@ -100,7 +100,7 @@ impl AppState {
         self.vertical_offset = 0;
         self.tree_scroll_offset = 0;
         self.data_vertical_scroll = 0;
-        self.visualize = VisualizeState::default();
+        self.visualize.reset_navigation();
         self.toast = None;
     }
 
@@ -120,6 +120,10 @@ impl AppState {
 
     pub fn horizontal_offset(&self) -> usize {
         self.horizontal_offset
+    }
+
+    pub fn set_horizontal_offset(&mut self, offset: usize) {
+        self.horizontal_offset = offset.min(self.max_horizontal_offset);
     }
 
     pub fn vertical_offset(&self) -> usize {
@@ -243,7 +247,7 @@ impl<'a> App<'a> {
             file_info.row_groups.num_row_groups(),
             sample_data_rows,
             file_info.metadata.total_property_display_lines(),
-            file_info.sample_data.total_columns,
+            &file_info.sample_data.flattened_columns,
         );
 
         Self {
@@ -267,10 +271,11 @@ impl<'a> App<'a> {
     }
 
     fn prepare_viewport(&mut self, terminal_size: Size) {
+        let is_visualize = self.tabs.active_tab().to_string() == "Visualize";
         let visible_rows = visible_data_rows(terminal_size.height);
         self.state.set_visible_data_rows(visible_rows);
 
-        if self.tabs.active_tab().to_string() == "Visualize" {
+        if is_visualize {
             let data = &self.parquet_ctx.sample_data;
             if self.state.visualize().selection_mode == SelectionMode::Column {
                 self.state.data_vertical_scroll = self
@@ -284,24 +289,30 @@ impl<'a> App<'a> {
             data.ensure_loaded(self.state.data_vertical_scroll(), visible_rows);
 
             let table = crate::components::DataTable::new(data)
+                .with_width_cache(&self.state.visualize().column_widths)
+                .with_projection(self.state.visualize().projection())
                 .with_vertical_scroll(self.state.data_vertical_scroll())
                 .with_horizontal_scroll(self.state.horizontal_offset());
             let area_height = terminal_size.height.saturating_sub(4);
-            self.state.set_max_horizontal_offset(
-                table.max_horizontal_scroll(terminal_size.width, area_height),
+            let max_scroll = table.max_horizontal_scroll(terminal_size.width, area_height);
+            let selected_column = self.state.visualize().selected_column.min(
+                self.state
+                    .visualize()
+                    .column_count(data.total_columns)
+                    .saturating_sub(1),
             );
-            self.state.visualize_mut().selected_column = self
-                .state
-                .visualize()
-                .selected_column
-                .min(data.total_columns.saturating_sub(1));
-            if self.state.visualize().selection_mode != SelectionMode::Row {
-                self.state.horizontal_offset = table.horizontal_scroll_for_selection(
+            let horizontal_scroll = if self.state.visualize().selection_mode != SelectionMode::Row {
+                table.horizontal_scroll_for_selection(
                     terminal_size.width,
                     area_height,
-                    self.state.visualize().selected_column,
-                );
-            }
+                    selected_column,
+                )
+            } else {
+                self.state.horizontal_offset().min(max_scroll)
+            };
+            self.state.set_max_horizontal_offset(max_scroll);
+            self.state.visualize_mut().selected_column = selected_column;
+            self.state.set_horizontal_offset(horizontal_scroll);
         } else {
             self.state.set_max_horizontal_offset(usize::MAX);
         }
@@ -344,7 +355,10 @@ impl<'a> App<'a> {
             EventOutcome::CopyCell => {
                 let result = self.parquet_ctx.sample_data.clipboard_value(
                     self.state.vertical_offset(),
-                    self.state.visualize().selected_column,
+                    self.state
+                        .visualize()
+                        .source_column(self.state.visualize().selected_column)
+                        .unwrap_or(self.parquet_ctx.sample_data.total_columns),
                 );
                 match result {
                     Ok(value) => match crate::clipboard::copy(&value, clipboard) {
@@ -391,6 +405,290 @@ mod tests {
         style::{Color, Modifier},
     };
 
+    fn set_column_filter(app: &mut App<'_>, expression: &str) {
+        app.handle_key_event(KeyCode::Char('*').into());
+        let count = app
+            .state
+            .visualize()
+            .prompt()
+            .unwrap()
+            .buffer
+            .chars()
+            .count();
+        app.handle_key_event(KeyCode::Home.into());
+        for _ in 0..count {
+            app.handle_key_event(KeyCode::Delete.into());
+        }
+        for character in expression.chars() {
+            app.handle_key_event(KeyCode::Char(character).into());
+        }
+        app.handle_key_event(KeyCode::Enter.into());
+    }
+
+    #[test]
+    #[ignore = "manual navigation timing; set PARQEYE_BENCH_FILE to benchmark another file"]
+    fn benchmark_visualize_navigation() {
+        let path = std::env::var("PARQEYE_BENCH_FILE").unwrap_or_else(|_| {
+            format!(
+                "{}/alltypes_tiny_pages.parquet",
+                crate::file::parquet_test_data()
+            )
+        });
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        assert!(
+            ctx.sample_data_error.is_none(),
+            "{:?}",
+            ctx.sample_data_error
+        );
+        let expression = ctx
+            .sample_data
+            .flattened_columns
+            .iter()
+            .step_by(2)
+            .rev()
+            .map(|name| format!("^{}$", regex::escape(name)))
+            .collect::<Vec<_>>()
+            .join("|");
+        let size = Size::new(120, 35);
+        for filtered in [false, true] {
+            for mode in [SelectionMode::Row, SelectionMode::Cell] {
+                let mut app = App::new(&ctx);
+                if filtered {
+                    set_column_filter(&mut app, &expression);
+                    app.state.set_horizontal_offset(0);
+                    app.state.visualize_mut().selected_column = 0;
+                }
+                app.state.visualize_mut().selection_mode = mode;
+                let mut terminal =
+                    Terminal::new(TestBackend::new(size.width, size.height)).unwrap();
+                let started = Instant::now();
+                for _ in 0..100 {
+                    app.handle_key_event(KeyCode::Down.into());
+                    app.prepare_viewport(size);
+                    terminal
+                        .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+                        .unwrap();
+                    std::hint::black_box(terminal.backend().buffer());
+                }
+                eprintln!(
+                    "filtered={filtered}, mode={mode:?}: {:.3} ms/frame",
+                    started.elapsed().as_secs_f64() * 10.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reordered_filters_preserve_selection_expression_navigation_and_clipboard_values() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        let names = &ctx.sample_data.flattened_columns;
+        let exact = |index: usize| format!("^{}$", regex::escape(&names[index]));
+        set_column_filter(&mut app, &[exact(0), exact(1), exact(4)].join("|"));
+        app.state.visualize_mut().selection_mode = SelectionMode::Cell;
+        app.handle_key_event(KeyCode::Down.into());
+        app.prepare_viewport(Size::new(80, 12));
+        let expression = [exact(4), exact(1), exact(0), exact(4)].join("|");
+        set_column_filter(&mut app, &expression);
+        assert_eq!(
+            app.state.visualize().projection(),
+            Some([4, 1, 0].as_slice())
+        );
+        assert_eq!(app.state.visualize().selected_column, 2);
+        assert_eq!(app.state.vertical_offset(), 1);
+
+        app.prepare_viewport(Size::new(80, 12));
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+            .unwrap();
+        let header_y = 3;
+        let header: String = (0..80)
+            .map(|x| terminal.backend().buffer()[(x, header_y)].symbol())
+            .collect();
+        assert!(header.find(&names[4]).unwrap() < header.find(&names[1]).unwrap());
+        assert!(header.find(&names[1]).unwrap() < header.find(&names[0]).unwrap());
+        let mut output = Vec::new();
+        app.handle_key_event_with_clipboard(KeyCode::Char('y').into(), &mut output);
+        assert_eq!(
+            output,
+            format!(
+                "\x1b]52;c;{}\x07",
+                STANDARD.encode(ctx.sample_data.clipboard_value(1, 0).unwrap())
+            )
+            .into_bytes()
+        );
+
+        app.handle_key_event(KeyCode::Char('*').into());
+        let prompt = app.state.visualize().prompt().unwrap();
+        assert_eq!(prompt.buffer, expression);
+        assert_eq!(prompt.column_matches.as_deref(), Some([4, 1, 0].as_slice()));
+        app.handle_key_event(KeyCode::Esc.into());
+        for key in [KeyCode::Tab, KeyCode::BackTab] {
+            app.handle_key_event(key.into());
+            assert_eq!(
+                app.state.visualize().projection(),
+                Some([4, 1, 0].as_slice())
+            );
+        }
+        app.state.visualize_mut().selection_mode = SelectionMode::Cell;
+        for source in [4, 1, 0] {
+            app.prepare_viewport(Size::new(25, 10));
+            let mut output = Vec::new();
+            app.handle_key_event_with_clipboard(KeyCode::Char('y').into(), &mut output);
+            assert_eq!(
+                output,
+                format!(
+                    "\x1b]52;c;{}\x07",
+                    STANDARD.encode(ctx.sample_data.clipboard_value(0, source).unwrap())
+                )
+                .into_bytes()
+            );
+            app.handle_key_event(KeyCode::Right.into());
+        }
+        set_column_filter(&mut app, "");
+        assert!(app.state.visualize().projection().is_none());
+        assert_eq!(app.state.visualize().selected_column, 0);
+    }
+
+    #[test]
+    fn filtered_navigation_copy_and_tab_switches_use_source_columns() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        let names = &ctx.sample_data.flattened_columns;
+        set_column_filter(
+            &mut app,
+            &format!(
+                "^({}|{})$",
+                regex::escape(&names[1]),
+                regex::escape(&names[4])
+            ),
+        );
+        app.handle_key_event(KeyCode::Char('v').into());
+        app.handle_key_event(KeyCode::Char('v').into());
+        app.handle_key_event(KeyCode::Right.into());
+        app.handle_key_event(KeyCode::Down.into());
+        assert_eq!(
+            app.state
+                .visualize()
+                .source_column(app.state.visualize().selected_column),
+            Some(4)
+        );
+        for (width, height) in [(80, 12), (25, 9), (100, 13)] {
+            app.prepare_viewport(Size::new(width, height));
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            let first_row = 5;
+            let selected_y =
+                first_row + (app.state.vertical_offset() - app.state.data_vertical_scroll()) as u16;
+            assert!((9..width).any(|x| buf[(x, selected_y)].bg == Color::Rgb(60, 60, 60)));
+            let mut output = Vec::new();
+            app.handle_key_event_with_clipboard(KeyCode::Char('y').into(), &mut output);
+            assert_eq!(
+                output,
+                format!(
+                    "\x1b]52;c;{}\x07",
+                    STANDARD.encode(ctx.sample_data.clipboard_value(1, 4).unwrap())
+                )
+                .into_bytes()
+            );
+        }
+        for key in [KeyCode::Tab, KeyCode::BackTab, KeyCode::Esc] {
+            app.handle_key_event(key.into());
+            app.prepare_viewport(Size::new(80, 12));
+            assert_eq!(app.state.visualize().projection(), Some([1, 4].as_slice()));
+            if key == KeyCode::Tab {
+                assert_eq!(app.state.visible_data_rows(), visible_data_rows(12));
+            }
+        }
+        set_column_filter(&mut app, &format!("^{}$", regex::escape(&names[4])));
+        let mut output = Vec::new();
+        app.handle_key_event_with_clipboard(KeyCode::Char('y').into(), &mut output);
+        assert!(!output.is_empty());
+        assert_eq!(app.state.visualize().selection_mode, SelectionMode::Row);
+        for code in [KeyCode::Char(':'), KeyCode::Char('8'), KeyCode::Enter] {
+            app.handle_key_event(code.into());
+        }
+        assert_eq!(app.state.vertical_offset(), 7);
+        assert_eq!(app.state.visualize().source_column(0), Some(4));
+        app.handle_key_event(KeyCode::PageUp.into());
+        assert!(app.state.vertical_offset() < 7);
+        set_column_filter(&mut app, "");
+        assert!(app.state.visualize().projection().is_none());
+        assert_eq!(app.state.visualize().selected_column, 4);
+    }
+
+    #[test]
+    fn column_prompt_scrolls_long_unicode_input_and_renders_in_tiny_terminals() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let mut ctx = ParquetCtx::from_file(&path).unwrap();
+        let long_name = format!("{}suffix", "資料_customer_".repeat(20));
+        ctx.sample_data.flattened_columns[0] = long_name.clone();
+        let mut app = App::new(&ctx);
+        set_column_filter(&mut app, "suffix$");
+        assert_eq!(app.state.visualize().projection(), Some([0].as_slice()));
+        app.state.visualize_mut().selection_mode = SelectionMode::Cell;
+        app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        assert_eq!(app.state.visualize().column_name_scroll, 1);
+        assert!(footer(&app).0.replace(' ', "").contains("Col:料_customer_"));
+        app.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT));
+        assert_eq!(app.state.visualize().column_name_scroll, 0);
+        assert!(
+            footer(&app)
+                .0
+                .replace(' ', "")
+                .contains("Col:資料_customer_")
+        );
+        app.handle_key_event(KeyCode::Char('*').into());
+        for character in long_name.chars() {
+            app.handle_key_event(KeyCode::Char(character).into());
+        }
+        for (width, height) in [(0, 0), (1, 1), (12, 6), (35, 10), (80, 12)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            app.prepare_viewport(Size::new(width, height));
+            terminal
+                .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+                .unwrap();
+            if width >= 12 {
+                let cursor = terminal.get_cursor_position().unwrap();
+                let buf = terminal.backend().buffer();
+                let line: String = (0..width).map(|x| buf[(x, height - 1)].symbol()).collect();
+                assert!(line.contains("suffix"), "{line}");
+                assert_eq!(cursor.y, height - 1);
+                assert_eq!(buf[cursor].symbol(), " ", "cursor must follow the input");
+                app.handle_key_event(KeyCode::Home.into());
+                app.prepare_viewport(Size::new(width, height));
+                terminal
+                    .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+                    .unwrap();
+                let line: String = (0..width)
+                    .map(|x| terminal.backend().buffer()[(x, height - 1)].symbol())
+                    .collect();
+                assert!(line.contains("suffix$"), "{line}");
+                let cursor = terminal.get_cursor_position().unwrap();
+                assert_eq!(cursor.y, height - 1);
+                assert_eq!(terminal.backend().buffer()[cursor].symbol(), "s");
+                app.handle_key_event(KeyCode::End.into());
+            }
+        }
+    }
+
     fn footer(app: &App<'_>) -> (String, Color) {
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         terminal
@@ -401,6 +699,107 @@ mod tests {
             (0..80).map(|x| buffer[(x, 9)].symbol()).collect(),
             buffer[(0, 9)].fg,
         )
+    }
+
+    #[test]
+    fn visualize_context_and_prompts_keep_the_table_geometry_fixed() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let mut ctx = ParquetCtx::from_file(&path).unwrap();
+        for (index, name) in ["a", "b", "c"].iter().enumerate() {
+            ctx.sample_data.flattened_columns[index] = (*name).into();
+        }
+        for height in [8, 10, 13] {
+            let mut app = App::new(&ctx);
+            let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
+            let mut render_table = |app: &mut App<'_>, expected_footer: &str| {
+                app.prepare_viewport(Size::new(80, height));
+                assert_eq!(app.state.visible_data_rows(), usize::from(height - 6));
+                terminal
+                    .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(app), frame))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let line = |y| -> String { (0..80).map(|x| buffer[(x, y)].symbol()).collect() };
+                assert!(line(3).contains('a'), "header must stay on row 3");
+                assert_eq!(buffer[(0, 5)].symbol(), "1");
+                assert_eq!(buffer[(0, height - 2)].symbol(), (height - 6).to_string());
+                assert!(line(height - 1).contains(expected_footer));
+                (3..height - 1).map(line).collect::<Vec<_>>()
+            };
+
+            let table = render_table(&mut app, "parqeye");
+            for _ in 0..3 {
+                app.handle_key_event(KeyCode::Char('v').into());
+                assert_eq!(render_table(&mut app, ""), table);
+            }
+
+            app.handle_key_event(KeyCode::Char('*').into());
+            assert_eq!(render_table(&mut app, "^exact_name$"), table);
+            app.handle_key_event(KeyCode::Char('[').into());
+            assert_eq!(render_table(&mut app, "Invalid regex"), table);
+            app.handle_key_event(KeyCode::Esc.into());
+            set_column_filter(&mut app, "^missing$");
+            assert_eq!(render_table(&mut app, "No columns match"), table);
+            app.handle_key_event(KeyCode::Esc.into());
+
+            set_column_filter(&mut app, "^a$|^c$|^b$");
+            let filtered_table = render_table(&mut app, "Columns: 3/");
+            assert!(filtered_table[0].find('c') < filtered_table[0].find('b'));
+            for mode in [
+                SelectionMode::Column,
+                SelectionMode::Cell,
+                SelectionMode::Row,
+            ] {
+                app.state.visualize_mut().selection_mode = mode;
+                assert_eq!(render_table(&mut app, "Columns: 3/"), filtered_table);
+            }
+            app.handle_key_event(KeyCode::Char('*').into());
+            assert_eq!(render_table(&mut app, "3/"), filtered_table);
+            app.handle_key_event(KeyCode::Esc.into());
+            app.handle_key_event(KeyCode::Char(':').into());
+            app.handle_key_event(KeyCode::Char('0').into());
+            app.handle_key_event(KeyCode::Enter.into());
+            assert_eq!(render_table(&mut app, "row must be"), filtered_table);
+            app.handle_key_event(KeyCode::Esc.into());
+            app.state.show_toast("Copied 1 chars", false);
+            assert_eq!(render_table(&mut app, "Copied 1 chars"), filtered_table);
+            app.state.toast.as_mut().unwrap().expires_at = Instant::now();
+            assert_eq!(render_table(&mut app, "Columns: 3/"), filtered_table);
+
+            for _ in 0..3 {
+                app.handle_key_event(KeyCode::Tab.into());
+                assert!(footer(&app).0.starts_with("parqeye"));
+            }
+        }
+    }
+
+    #[test]
+    fn filtered_cell_navigation_uses_the_last_data_line_after_resizing() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        set_column_filter(&mut app, "^id$");
+        app.state.visualize_mut().selection_mode = SelectionMode::Cell;
+        for height in [8, 13, 10] {
+            app.handle_key_event(KeyCode::Home.into());
+            app.prepare_viewport(Size::new(80, height));
+            let rows_on_screen = usize::from(height - 6);
+            for _ in 1..rows_on_screen {
+                app.handle_key_event(KeyCode::Down.into());
+            }
+            assert_last_data_line_is_selected(&app, height, rows_on_screen);
+            app.handle_key_event(KeyCode::PageDown.into());
+            app.prepare_viewport(Size::new(80, height));
+            assert_last_data_line_is_selected(&app, height, (2 * rows_on_screen).min(8));
+            app.handle_key_event(KeyCode::Char('G').into());
+            app.prepare_viewport(Size::new(80, height));
+            assert_last_data_line_is_selected(&app, height, ctx.sample_data.total_rows);
+        }
     }
 
     #[test]
@@ -436,7 +835,12 @@ mod tests {
 
         app.state.toast.as_mut().unwrap().expires_at = Instant::now();
         assert!(app.state.toast().is_none());
-        assert!(footer(&app).0.starts_with("parqeye"));
+        assert!(footer(&app).0.starts_with("Col: "));
+        assert!(
+            footer(&app)
+                .0
+                .contains(&ctx.sample_data.flattened_columns[1])
+        );
     }
 
     #[test]
@@ -619,7 +1023,7 @@ mod tests {
                 app.state.horizontal_offset(),
             );
             let footer: String = (0..width).map(|x| buf[(x, height - 1)].symbol()).collect();
-            assert!(footer.starts_with("parqeye"), "{footer}");
+            assert!(footer.starts_with("Col: "), "{footer}");
         }
         for _ in 0..ctx.sample_data.total_columns {
             app.handle_key_event(KeyEvent::from(KeyCode::Left));

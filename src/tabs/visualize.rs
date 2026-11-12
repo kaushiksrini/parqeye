@@ -1,6 +1,8 @@
+use crate::components::data_table::ColumnWidthCache;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Stylize;
 use ratatui::text::Span;
+use std::cell::RefCell;
 use std::io;
 
 use crate::{
@@ -18,6 +20,10 @@ pub struct VisualizeState {
     mode: VisualizeMode,
     pub selection_mode: SelectionMode,
     pub selected_column: usize,
+    pub column_filter: Option<String>,
+    projection: Option<Vec<usize>>,
+    pub column_name_scroll: usize,
+    pub(crate) column_widths: RefCell<ColumnWidthCache>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -40,7 +46,33 @@ impl SelectionMode {
 
 impl VisualizeState {
     pub fn begin_prompt(&mut self, kind: PromptKind) {
-        self.mode = VisualizeMode::Prompt(CommandPrompt::new(kind));
+        let mut prompt = CommandPrompt::new(kind);
+        if kind == PromptKind::Columns {
+            prompt.buffer = self.column_filter.clone().unwrap_or_default();
+            prompt.cursor = prompt.buffer.len();
+        }
+        self.mode = VisualizeMode::Prompt(prompt);
+    }
+
+    pub fn projection(&self) -> Option<&[usize]> {
+        self.projection.as_deref()
+    }
+
+    pub fn column_count(&self, total: usize) -> usize {
+        self.projection.as_ref().map_or(total, Vec::len)
+    }
+
+    pub fn source_column(&self, visible: usize) -> Option<usize> {
+        self.projection
+            .as_ref()
+            .map_or(Some(visible), |indices| indices.get(visible).copied())
+    }
+
+    pub fn reset_navigation(&mut self) {
+        self.mode = VisualizeMode::Normal;
+        self.selection_mode = SelectionMode::Row;
+        self.selected_column = 0;
+        self.column_name_scroll = 0;
     }
 
     pub fn cancel_prompt(&mut self) {
@@ -73,6 +105,7 @@ pub struct VisualizeTab {
     pub max_columns: Option<usize>,
     pub max_rows: Option<usize>,
     pub visible_rows: Option<usize>,
+    column_names: Vec<String>,
 }
 
 impl Default for VisualizeTab {
@@ -87,11 +120,18 @@ impl VisualizeTab {
             max_columns: None,
             max_rows: None,
             visible_rows: None,
+            column_names: Vec::new(),
         }
     }
 
     pub fn with_max_columns(mut self, max_columns: usize) -> Self {
         self.max_columns = Some(max_columns);
+        self
+    }
+
+    pub fn with_column_names(mut self, names: &[String]) -> Self {
+        self.max_columns = Some(names.len());
+        self.column_names = names.to_vec();
         self
     }
 
@@ -111,6 +151,39 @@ impl VisualizeTab {
         state: &mut AppState,
     ) -> Result<(), String> {
         match command {
+            VisualizeCommand::FilterColumns(expression) => {
+                let prompt = state
+                    .visualize()
+                    .prompt()
+                    .expect("column prompt must be open");
+                if let Some(error) = &prompt.error {
+                    return Err(error.clone());
+                }
+                let indices = prompt
+                    .column_matches
+                    .clone()
+                    .ok_or("Column filter has no matches")?;
+                let source = state
+                    .visualize()
+                    .source_column(state.visualize().selected_column);
+                let selected = source
+                    .and_then(|source| indices.iter().position(|&index| index == source))
+                    .unwrap_or(0);
+                let visualize = state.visualize_mut();
+                visualize.selected_column = selected;
+                visualize.column_name_scroll = 0;
+                if expression.is_empty() {
+                    visualize.column_filter = None;
+                    visualize.projection = None;
+                } else {
+                    visualize.column_filter = Some(expression);
+                    visualize.projection = Some(indices);
+                }
+                // The viewport is recalculated before the next render.
+                state.set_max_horizontal_offset(usize::MAX);
+                state.set_horizontal_offset(selected);
+                Ok(())
+            }
             VisualizeCommand::GoToRow(row) => {
                 let max_rows = self.max_rows.unwrap_or(0);
                 if row > max_rows {
@@ -128,6 +201,7 @@ impl VisualizeTab {
     }
 
     fn handle_prompt_event(&self, key_event: KeyEvent, state: &mut AppState) -> EventOutcome {
+        let old_buffer = state.visualize().prompt().unwrap().buffer.clone();
         let prompt_event = state
             .visualize_mut()
             .prompt_mut()
@@ -135,7 +209,12 @@ impl VisualizeTab {
             .handle_key_event(key_event);
 
         match prompt_event {
-            PromptEvent::Continue => {}
+            PromptEvent::Continue => {
+                let prompt = state.visualize_mut().prompt_mut().unwrap();
+                if prompt.kind == PromptKind::Columns && prompt.buffer != old_buffer {
+                    prompt.resolve_columns(&self.column_names);
+                }
+            }
             PromptEvent::Cancel => state.visualize_mut().cancel_prompt(),
             PromptEvent::Submit { kind, input } => {
                 let result = parse_command(kind, &input)
@@ -168,11 +247,41 @@ impl Tab for VisualizeTab {
         }
 
         let max_rows = self.max_rows.unwrap_or(0);
-        let max_columns = self.max_columns.unwrap_or(0);
+        let max_columns = state
+            .visualize()
+            .column_count(self.max_columns.unwrap_or(0));
         let visible_rows = state.visible_data_rows();
         let selection_mode = state.visualize().selection_mode;
 
         let outcome = match key_event.code {
+            KeyCode::Char('*') => {
+                state.visualize_mut().begin_prompt(PromptKind::Columns);
+                state
+                    .visualize_mut()
+                    .prompt_mut()
+                    .unwrap()
+                    .resolve_columns(&self.column_names);
+                EventOutcome::Consumed
+            }
+            KeyCode::Left | KeyCode::Right
+                if key_event.modifiers == KeyModifiers::ALT
+                    && selection_mode != SelectionMode::Row =>
+            {
+                let visualize = state.visualize_mut();
+                let name_len = visualize
+                    .source_column(visualize.selected_column)
+                    .and_then(|index| self.column_names.get(index))
+                    .map_or(0, |name| name.chars().count());
+                visualize.column_name_scroll = if key_event.code == KeyCode::Left {
+                    visualize.column_name_scroll.saturating_sub(1)
+                } else {
+                    visualize
+                        .column_name_scroll
+                        .saturating_add(1)
+                        .min(name_len.saturating_sub(1))
+                };
+                EventOutcome::Consumed
+            }
             KeyCode::Char(':') => {
                 state.visualize_mut().begin_prompt(PromptKind::GoToRow);
                 EventOutcome::Consumed
@@ -275,6 +384,7 @@ impl Tab for VisualizeTab {
             }
             // Column navigation (Left/Right arrows)
             KeyCode::Left => {
+                state.visualize_mut().column_name_scroll = 0;
                 if selection_mode == SelectionMode::Row {
                     state.left();
                     state.visualize_mut().selected_column = state.horizontal_offset();
@@ -285,6 +395,7 @@ impl Tab for VisualizeTab {
                 EventOutcome::Consumed
             }
             KeyCode::Right => {
+                state.visualize_mut().column_name_scroll = 0;
                 if selection_mode == SelectionMode::Row {
                     state.right();
                     state.visualize_mut().selected_column = state.horizontal_offset();
@@ -293,7 +404,7 @@ impl Tab for VisualizeTab {
                         .visualize()
                         .selected_column
                         .saturating_add(1)
-                        .min(self.max_columns.unwrap_or(0).saturating_sub(1));
+                        .min(max_columns.saturating_sub(1));
                     state.visualize_mut().selected_column = column;
                 }
                 EventOutcome::Consumed
@@ -305,6 +416,10 @@ impl Tab for VisualizeTab {
 
     fn instructions(&self) -> Vec<Span<'static>> {
         vec![
+            "*".green(),
+            " : Columns | ".into(),
+            "Alt-←/→".green(),
+            " : Scroll name | ".into(),
             "y".green(),
             " : Yank cell | ".into(),
             "v".green(),
@@ -351,6 +466,94 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn enter_filter(tab: &VisualizeTab, state: &mut AppState, expression: &str) {
+        tab.on_event(key(KeyCode::Char('*')), state).unwrap();
+        let prompt = state.visualize_mut().prompt_mut().unwrap();
+        prompt.buffer = expression.into();
+        prompt.cursor = expression.len();
+        prompt.resolve_columns(&tab.column_names);
+        tab.on_event(key(KeyCode::Enter), state).unwrap();
+    }
+
+    #[test]
+    fn filters_replace_preserve_source_selection_and_clear_without_changing_rows() {
+        let names: Vec<_> = ["a", "b", "c", "d"].into_iter().map(String::from).collect();
+        let tab = VisualizeTab::new()
+            .with_column_names(&names)
+            .with_max_rows(20);
+        let mut state = AppState::new();
+        state.jump_to_row(7, 3, 20);
+        state.visualize_mut().selection_mode = SelectionMode::Cell;
+        state.visualize_mut().selected_column = 2;
+        let scroll = state.data_vertical_scroll();
+        enter_filter(&tab, &mut state, "^(a|c)$");
+        assert_eq!(state.visualize().projection(), Some([0, 2].as_slice()));
+        assert_eq!(state.visualize().selected_column, 1);
+        assert_eq!(state.visualize().selection_mode, SelectionMode::Cell);
+        assert_eq!(state.vertical_offset(), 7);
+        assert_eq!(state.data_vertical_scroll(), scroll);
+        tab.on_event(key(KeyCode::Right), &mut state).unwrap();
+        assert_eq!(state.visualize().selected_column, 1);
+        tab.on_event(key(KeyCode::Char('*')), &mut state).unwrap();
+        assert_eq!(state.visualize().prompt().unwrap().buffer, "^(a|c)$");
+        tab.on_event(key(KeyCode::Esc), &mut state).unwrap();
+        enter_filter(&tab, &mut state, "^d$");
+        assert_eq!(state.visualize().projection(), Some([3].as_slice()));
+        assert_eq!(state.visualize().selected_column, 0);
+        enter_filter(&tab, &mut state, "");
+        assert_eq!(state.visualize().projection(), None);
+        assert_eq!(state.visualize().column_filter, None);
+        assert_eq!(state.visualize().selected_column, 3);
+    }
+
+    #[test]
+    fn invalid_input_cancellation_and_navigation_resets_preserve_applied_filter() {
+        let names = vec!["a".into(), "b".into()];
+        let tab = VisualizeTab::new()
+            .with_column_names(&names)
+            .with_max_rows(20);
+        let mut state = AppState::new();
+        enter_filter(&tab, &mut state, "^b$");
+        for invalid in ["[", "missing"] {
+            enter_filter(&tab, &mut state, invalid);
+            assert!(state.visualize().prompt().unwrap().error.is_some());
+            assert_eq!(state.visualize().projection(), Some([1].as_slice()));
+            tab.on_event(key(KeyCode::Esc), &mut state).unwrap();
+        }
+        state.reset();
+        assert_eq!(state.visualize().column_filter.as_deref(), Some("^b$"));
+        assert_eq!(state.visualize().projection(), Some([1].as_slice()));
+        assert_eq!(
+            tab.on_event(key(KeyCode::Char('y')), &mut state).unwrap(),
+            EventOutcome::CopyCell
+        );
+        tab.on_event(key(KeyCode::Char('v')), &mut state).unwrap();
+        assert_eq!(state.visualize().selection_mode, SelectionMode::Row);
+        enter_filter(&tab, &mut state, "");
+        tab.on_event(key(KeyCode::Char('*')), &mut state).unwrap();
+        tab.on_event(key(KeyCode::Char('B')), &mut state).unwrap();
+        assert_eq!(
+            state
+                .visualize()
+                .prompt()
+                .unwrap()
+                .column_matches
+                .as_deref(),
+            Some([1].as_slice())
+        );
+        assert_eq!(
+            tab.on_event(key(KeyCode::Tab), &mut state).unwrap(),
+            EventOutcome::Consumed
+        );
+        tab.on_event(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &mut state,
+        )
+        .unwrap();
+        assert!(state.visualize().prompt().is_none());
+        assert!(state.visualize().projection().is_none());
     }
 
     #[test]

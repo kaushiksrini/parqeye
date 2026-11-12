@@ -9,7 +9,8 @@ use ratatui::{
     text::Span,
     widgets::Widget,
 };
-use std::cmp::min;
+use std::borrow::Cow;
+use std::cell::{Ref, RefCell};
 
 use crate::file::Renderable;
 use crate::file::utils::commas;
@@ -19,25 +20,74 @@ const NUM_SPACES_AFTER_LINE_NUMBER: u16 = 2;
 const MIN_ROW_NUM_DIGITS: u16 = 4;
 /// Header text line plus the separator line above the first data row.
 const HEADER_HEIGHT: u16 = 2;
+const MAX_COLUMN_WIDTH: usize = 25;
+
+/// Only the most recent viewport is retained. Shared by layout and rendering so
+/// moving the cursor or redrawing a prompt does not remeasure the same cells.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ColumnWidthCache {
+    viewport: Option<(usize, u16, usize, usize)>,
+    projection: Option<Vec<usize>>,
+    widths: Vec<u16>,
+    #[cfg(test)]
+    calculations: usize,
+}
+
+/// Stop measuring once a string fills the column; long values and names should
+/// cost no more than short ones when both will be clipped to the same width.
+fn capped_width(text: &str, limit: usize) -> usize {
+    if text.len() <= limit {
+        return Span::raw(text).width().min(limit);
+    }
+    if let Some(prefix) = text.get(..limit)
+        && prefix.is_ascii()
+        && Span::raw(prefix).width() == limit
+    {
+        return limit;
+    }
+    let span = Span::raw(text);
+    let mut width = 0;
+    for grapheme in span.styled_graphemes(ratatui::style::Style::default()) {
+        width += Span::raw(grapheme.symbol).width();
+        if width >= limit {
+            return limit;
+        }
+    }
+    width
+}
 
 /// Truncate by terminal display width without splitting UTF-8 characters.
-fn truncate_cell(text: &str, width: u16) -> String {
-    if Span::raw(text).width() <= usize::from(width) {
-        return text.to_string();
-    }
+pub(crate) fn truncate_cell(text: &str, width: u16) -> Cow<'_, str> {
     if width == 0 {
-        return String::new();
+        return Cow::Borrowed("");
     }
+    let limit = usize::from(width);
+    if text.len() <= limit {
+        return Cow::Borrowed(text);
+    }
+    if let Some(prefix) = text.get(..limit + 1)
+        && prefix.is_ascii()
+        && Span::raw(prefix).width() == limit + 1
+    {
+        return Cow::Owned(format!("{}…", &prefix[..limit - 1]));
+    }
+    let span = Span::raw(text);
     let mut prefix = String::new();
-    for character in text.chars() {
-        let next = format!("{prefix}{character}");
-        if Span::raw(next.as_str()).width() > usize::from(width - 1) {
-            break;
+    let mut used = 0;
+    let mut ellipsis_end = 0;
+    for grapheme in span.styled_graphemes(ratatui::style::Style::default()) {
+        used += Span::raw(grapheme.symbol).width();
+        if used > usize::from(width) {
+            prefix.truncate(ellipsis_end);
+            prefix.push('…');
+            return Cow::Owned(prefix);
         }
-        prefix.push(character);
+        prefix.push_str(grapheme.symbol);
+        if used < usize::from(width) {
+            ellipsis_end = prefix.len();
+        }
     }
-    prefix.push('…');
-    prefix
+    Cow::Borrowed(text)
 }
 
 /// Digits needed for the largest row number currently in view.
@@ -82,6 +132,9 @@ fn max_scroll_from_widths(widths: &[u16], available_width: u16) -> usize {
 
 pub struct DataTable<'a> {
     pub data: &'a ParquetSampleData,
+    projection: Option<&'a [usize]>,
+    width_cache: Option<&'a RefCell<ColumnWidthCache>>,
+    local_width_cache: RefCell<ColumnWidthCache>,
     pub title: String,
     pub title_color: Color,
     pub border_style: border::Set,
@@ -103,6 +156,9 @@ impl<'a> DataTable<'a> {
     pub fn new(data: &'a ParquetSampleData) -> Self {
         Self {
             data,
+            projection: None,
+            width_cache: None,
+            local_width_cache: RefCell::default(),
             title: format!("Data Preview ({} rows)", commas(data.total_rows as u64)),
             title_color: Color::Cyan,
             border_style: border::ROUNDED,
@@ -119,6 +175,26 @@ impl<'a> DataTable<'a> {
     pub fn with_title(mut self, title: String) -> Self {
         self.title = title;
         self
+    }
+
+    pub fn with_projection(mut self, projection: Option<&'a [usize]>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    pub(crate) fn with_width_cache(mut self, cache: &'a RefCell<ColumnWidthCache>) -> Self {
+        self.width_cache = Some(cache);
+        self
+    }
+
+    fn source_columns(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.column_count())
+            .map(|index| self.projection.map_or(index, |indices| indices[index]))
+    }
+
+    fn column_count(&self) -> usize {
+        self.projection
+            .map_or(self.data.total_columns, <[usize]>::len)
     }
 
     pub fn with_colors(mut self, title: Color, selected: Color) -> Self {
@@ -173,18 +249,40 @@ impl<'a> DataTable<'a> {
         let max_visible_columns = available_width / min_column_width;
 
         // Total columns minus visible columns
-        self.data.total_columns.saturating_sub(max_visible_columns)
+        self.column_count().saturating_sub(max_visible_columns)
     }
 
     /// Rendered width of every column (from the rows in view). Basis for both the
     /// scroll bound and how many columns are drawn, so they stay in agreement.
-    fn all_column_widths(&self) -> Vec<u16> {
+    fn all_column_widths(&self, area_height: u16) -> Ref<'_, [u16]> {
         let win = self.data.loaded();
-        let start = self
-            .vertical_scroll
-            .saturating_sub(win.start)
-            .min(win.rows.len());
-        self.calculate_column_widths(&self.data.flattened_columns, &win.rows[start..])
+        let rows_height = Self::visible_rows(area_height);
+        let key = (self.vertical_scroll, rows_height, win.start, win.rows.len());
+        let cell = self.width_cache.unwrap_or(&self.local_width_cache);
+        let cache = cell.borrow();
+        let valid = cache.viewport == Some(key)
+            && cache.projection.as_deref() == self.projection
+            && cache.widths.len() == self.column_count();
+        drop(cache);
+        if !valid {
+            let start = self
+                .vertical_scroll
+                .saturating_sub(win.start)
+                .min(win.rows.len());
+            let end = start
+                .saturating_add(usize::from(rows_height))
+                .min(win.rows.len());
+            let widths = self.calculate_column_widths(&win.rows[start..end]);
+            let mut cache = cell.borrow_mut();
+            cache.viewport = Some(key);
+            cache.projection = self.projection.map(<[usize]>::to_vec);
+            cache.widths = widths;
+            #[cfg(test)]
+            {
+                cache.calculations += 1;
+            }
+        }
+        Ref::map(cell.borrow(), |cache| cache.widths.as_slice())
     }
 
     /// Digits in the row number gutter for a render area `area_height` tall.
@@ -202,7 +300,7 @@ impl<'a> DataTable<'a> {
         let row_num_section_width =
             self.row_num_digits(area_height) + 2 * NUM_SPACES_AFTER_LINE_NUMBER + 1;
         let available_width = area_width.saturating_sub(row_num_section_width);
-        max_scroll_from_widths(&self.all_column_widths(), available_width)
+        max_scroll_from_widths(&self.all_column_widths(area_height), available_width)
     }
 
     /// Keep the selected column fully visible, allowing one over-wide column
@@ -215,7 +313,7 @@ impl<'a> DataTable<'a> {
     ) -> usize {
         let gutter = self.row_num_digits(area_height) + 2 * NUM_SPACES_AFTER_LINE_NUMBER + 1;
         let available_width = area_width.saturating_sub(gutter);
-        let widths = self.all_column_widths();
+        let widths = self.all_column_widths(area_height);
         let max_scroll = max_scroll_from_widths(&widths, available_width);
         let selected_column = selected_column.min(widths.len().saturating_sub(1));
         let mut scroll = self.horizontal_scroll.min(max_scroll).min(selected_column);
@@ -227,25 +325,25 @@ impl<'a> DataTable<'a> {
         scroll
     }
 
-    fn calculate_column_widths(
-        &self,
-        headers: &[String],
-        visible_rows: &[Vec<String>],
-    ) -> Vec<u16> {
+    fn calculate_column_widths(&self, visible_rows: &[Vec<String>]) -> Vec<u16> {
         let mut widths = Vec::new();
 
-        for (col_idx, header) in headers.iter().enumerate() {
-            let mut max_width = Span::raw(header.as_str()).width();
+        for col_idx in self.source_columns() {
+            let header = &self.data.flattened_columns[col_idx];
+            let mut max_width = capped_width(header, MAX_COLUMN_WIDTH);
 
             // Check content width for this column
             for row in visible_rows {
+                if max_width == MAX_COLUMN_WIDTH {
+                    break;
+                }
                 if let Some(cell) = row.get(col_idx) {
-                    max_width = max_width.max(Span::raw(cell.as_str()).width());
+                    max_width = max_width.max(capped_width(cell, MAX_COLUMN_WIDTH));
                 }
             }
 
             // Use minimum width of 8 and maximum of 25 for readability, add spacing
-            widths.push((min(max_width.max(8), 25) as u16) + NUM_SPACES_BETWEEN_COLUMNS);
+            widths.push((max_width.max(8) as u16) + NUM_SPACES_BETWEEN_COLUMNS);
         }
 
         widths
@@ -268,7 +366,7 @@ impl<'a> DataTable<'a> {
         }
     }
 
-    fn render_row_numbers(&self, buf: &mut Buffer, area: Rect, rows: &[Vec<String>]) {
+    fn render_row_numbers(&self, buf: &mut Buffer, area: Rect, rows: &[Vec<&str>]) {
         let mut y = area.y;
 
         for (row_idx, _) in rows.iter().take(usize::from(area.height)).enumerate() {
@@ -299,7 +397,7 @@ impl<'a> DataTable<'a> {
         buf: &mut Buffer,
         x_start: u16,
         y: u16,
-        headers: &[String],
+        headers: &[&str],
         column_widths: &[u16],
         max_width: u16,
     ) {
@@ -312,7 +410,7 @@ impl<'a> DataTable<'a> {
 
             let effective_width = width.saturating_sub(NUM_SPACES_BETWEEN_COLUMNS);
             let truncated = truncate_cell(header, effective_width);
-            let padding = usize::from(width).saturating_sub(Span::raw(truncated.as_str()).width());
+            let padding = usize::from(width).saturating_sub(Span::raw(truncated.as_ref()).width());
 
             let mut style = ratatui::style::Style::default()
                 .fg(Color::Yellow)
@@ -335,7 +433,7 @@ impl<'a> DataTable<'a> {
         buf: &mut Buffer,
         x_start: u16,
         y: u16,
-        row_data: &[String],
+        row_data: &[&str],
         column_widths: &[u16],
         is_selected: bool,
         max_width: u16,
@@ -365,7 +463,7 @@ impl<'a> DataTable<'a> {
             let truncated = truncate_cell(cell_data, effective_width);
 
             // Pad with spaces to fill the column width
-            let padding = usize::from(width).saturating_sub(Span::raw(truncated.as_str()).width());
+            let padding = usize::from(width).saturating_sub(Span::raw(truncated.as_ref()).width());
             let padded = format!("{truncated}{}", " ".repeat(padding));
             let span = Span::styled(padded, style);
 
@@ -412,34 +510,36 @@ impl<'a> Widget for DataTable<'a> {
         // many columns as truly fit from there. Sizing by real column widths
         // (not a flat estimate) keeps wide columns from pushing the last ones
         // off-screen / out of reach.
-        let all_widths = self.all_column_widths();
-        let max_scroll = max_scroll_from_widths(&all_widths, available_width);
-        let horizontal_scroll = self.horizontal_scroll.min(max_scroll);
-        self.horizontal_scroll = horizontal_scroll;
+        self.horizontal_scroll = self
+            .horizontal_scroll
+            .min(self.max_horizontal_scroll(area.width, area.height));
+        let all_widths = self.all_column_widths(area.height);
+        let horizontal_scroll = self.horizontal_scroll;
         let max_visible_columns = columns_fitting(&all_widths, horizontal_scroll, available_width);
 
         // Get visible columns
-        let visible_headers: Vec<String> = self
-            .data
-            .flattened_columns
-            .iter()
+        let columns: Vec<_> = self
+            .source_columns()
             .skip(horizontal_scroll)
             .take(max_visible_columns)
-            .cloned()
+            .collect();
+        let visible_headers: Vec<&str> = columns
+            .iter()
+            .map(|&index| self.data.flattened_columns[index].as_str())
             .collect();
 
         // Get visible data for each row (apply vertical scroll). Rows live in a
         // bounded window; index into it relative to the window start.
         let row_skip = self.vertical_scroll.saturating_sub(win.start);
-        let visible_rows: Vec<Vec<String>> = win
+        let visible_rows: Vec<Vec<&str>> = win
             .rows
             .iter()
             .skip(row_skip)
+            .take(usize::from(Self::visible_rows(area.height)))
             .map(|row| {
-                row.iter()
-                    .skip(horizontal_scroll)
-                    .take(max_visible_columns)
-                    .cloned()
+                columns
+                    .iter()
+                    .map(|&index| row.get(index).map_or("", String::as_str))
                     .collect()
             })
             .collect();
@@ -513,6 +613,131 @@ impl Renderable for ParquetSampleData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn widths_ignore_offscreen_rows_and_cache_across_layout_and_rendering() {
+        let data = ParquetSampleData::from_rows(
+            &["a", "b", "c"],
+            vec![
+                vec!["short".into(), "short".into(), "short".into()],
+                vec!["longer_visible_value".into(), "x".into(), "x".into()],
+                vec!["x".repeat(1_000_000), "x".into(), "x".into()],
+            ],
+        );
+        let cache = RefCell::new(ColumnWidthCache::default());
+        let projection = [0, 2];
+        let table = DataTable::new(&data)
+            .with_projection(Some(&projection))
+            .with_width_cache(&cache);
+        assert_eq!(&*table.all_column_widths(3), &[10, 10]);
+        assert_eq!(table.max_horizontal_scroll(80, 3), 0);
+        assert_eq!(table.horizontal_scroll_for_selection(80, 3, 1), 0);
+        let area = Rect::new(0, 0, 80, 3);
+        table.render(area, &mut Buffer::empty(area));
+        assert_eq!(cache.borrow().calculations, 1);
+
+        let table = DataTable::new(&data)
+            .with_projection(Some(&projection))
+            .with_width_cache(&cache)
+            .with_selection(SelectionMode::Cell, 1)
+            .with_selected_row(Some(0))
+            .with_horizontal_scroll(1);
+        // Horizontal resizing and cursor movement reuse widths for the same rows.
+        assert_eq!(table.max_horizontal_scroll(20, 3), 1);
+        assert_eq!(cache.borrow().calculations, 1);
+        assert_eq!(table.all_column_widths(4)[0], 22);
+        assert_eq!(cache.borrow().calculations, 2);
+        let reordered = DataTable::new(&data)
+            .with_projection(Some(&[2, 0]))
+            .with_width_cache(&cache);
+        assert_eq!(&*reordered.all_column_widths(4), &[10, 22]);
+        assert_eq!(cache.borrow().calculations, 3);
+        let table = table.with_vertical_scroll(2);
+        assert_eq!(table.all_column_widths(3)[0], 27);
+        assert_eq!(cache.borrow().calculations, 4);
+        let table = table.with_projection(Some(&[1]));
+        assert_eq!(&*table.all_column_widths(3), &[10]);
+        assert_eq!(cache.borrow().calculations, 5);
+        let table = table.with_projection(None);
+        assert_eq!(&*table.all_column_widths(3), &[27, 10, 10]);
+        assert_eq!(cache.borrow().calculations, 6);
+    }
+
+    #[test]
+    fn width_cache_recomputes_after_the_reader_window_changes() {
+        let path = format!(
+            "{}/alltypes_tiny_pages.parquet",
+            crate::file::parquet_test_data()
+        );
+        let data = ParquetSampleData::open(&path, 7300).unwrap();
+        let cache = RefCell::default();
+        let table = DataTable::new(&data).with_width_cache(&cache);
+        table.max_horizontal_scroll(80, 6);
+        assert_eq!(cache.borrow().calculations, 1);
+        data.ensure_loaded(6000, 4);
+        table.max_horizontal_scroll(80, 6);
+        assert_eq!(cache.borrow().calculations, 2);
+    }
+
+    #[test]
+    fn capped_measurement_and_clipping_preserve_unicode_graphemes() {
+        for text in [
+            "",
+            "abcdef",
+            "資料📊",
+            "e\u{301}clair",
+            "👩‍💻 family 👨‍👩‍👧‍👦",
+            "x\nlong",
+        ] {
+            for width in 0..15 {
+                assert_eq!(
+                    capped_width(text, width),
+                    Span::raw(text).width().min(width)
+                );
+                let clipped = truncate_cell(text, width as u16);
+                assert!(Span::raw(clipped.as_ref()).width() <= width);
+            }
+        }
+        assert_eq!(truncate_cell("abcdef", 4), "abc…");
+        assert_eq!(truncate_cell("資料", 3), "資…");
+        assert_eq!(truncate_cell("👩‍💻xyz", 3), "👩‍💻…");
+        assert_eq!(truncate_cell("e\u{301}clair", 3), "e\u{301}c…");
+    }
+
+    #[test]
+    fn projection_keeps_headers_values_and_highlights_aligned() {
+        let data = sample_data();
+        let projection = [1, 4];
+        for mode in [
+            SelectionMode::Row,
+            SelectionMode::Column,
+            SelectionMode::Cell,
+        ] {
+            let area = Rect::new(0, 0, 80, 6);
+            let mut buf = Buffer::empty(area);
+            let table = DataTable::new(&data)
+                .with_projection(Some(&projection))
+                .with_selected_row(Some(1))
+                .with_selection(mode, 1);
+            let widths = table.all_column_widths(area.height);
+            assert_eq!(widths.len(), 2);
+            let second_x = 9 + widths[0];
+            drop(widths);
+            table.render(area, &mut buf);
+            let line = |y| (0..80).map(|x| buf[(x, y)].symbol()).collect::<String>();
+            assert!(line(0).contains(&data.flattened_columns[1]));
+            assert!(line(0).contains(&data.flattened_columns[4]));
+            assert!(!line(0).contains(&data.flattened_columns[0]));
+            let win = data.loaded();
+            let rendered_value: String = (second_x..80).map(|x| buf[(x, 3)].symbol()).collect();
+            assert!(rendered_value.starts_with(&win.rows[1][4]));
+            assert_eq!(buf[(second_x, 3)].bg, Color::Rgb(60, 60, 60));
+            assert_eq!(
+                buf[(second_x, 0)].bg == Color::Rgb(60, 60, 60),
+                mode == SelectionMode::Column
+            );
+        }
+    }
 
     fn sample_data() -> ParquetSampleData {
         let path = format!(

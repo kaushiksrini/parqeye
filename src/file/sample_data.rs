@@ -36,6 +36,17 @@ pub struct ParquetSampleData {
 }
 
 impl ParquetSampleData {
+    #[cfg(test)]
+    pub(crate) fn from_rows(columns: &[&str], rows: Vec<Vec<String>>) -> Self {
+        Self {
+            flattened_columns: columns.iter().map(|name| (*name).to_string()).collect(),
+            total_columns: columns.len(),
+            total_rows: rows.len(),
+            window: RefCell::new(RowWindow { start: 0, rows }),
+            ..Self::default()
+        }
+    }
+
     /// Open the file and load the first window. Polars panics for some unsupported
     /// parquet formats, so those panics are returned as ordinary errors.
     pub fn open(

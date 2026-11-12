@@ -24,13 +24,13 @@ impl TabManager {
         num_row_groups: usize,
         sample_data_rows: usize,
         num_properties: usize,
-        sample_data_columns: usize,
+        sample_data_columns: &[String],
     ) -> Self {
         Self {
             tabs: vec![
                 Box::new(
                     VisualizeTab::new()
-                        .with_max_columns(sample_data_columns)
+                        .with_column_names(sample_data_columns)
                         .with_max_rows(sample_data_rows),
                 ),
                 Box::new(
