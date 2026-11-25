@@ -4,6 +4,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use crate::file::parquet_ctx::ParquetCtx;
+use crate::tabs::visualize::search::{SearchRequest, SearchWorker};
 use crate::tabs::visualize::{SelectionMode, VisualizeState};
 use crate::tabs::{EventOutcome, TabManager};
 
@@ -54,6 +55,7 @@ pub struct App<'a> {
     pub exit: bool,
     pub tabs: TabManager,
     pub state: AppState,
+    search_worker: SearchWorker,
 }
 
 pub struct AppState {
@@ -256,11 +258,13 @@ impl<'a> App<'a> {
             exit: false,
             tabs: tab_manager,
             state: AppState::new(),
+            search_worker: SearchWorker::default(),
         }
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
+            self.poll_search();
             self.prepare_viewport(terminal.size()?);
 
             let render_view = AppRenderView::from_app(self);
@@ -319,11 +323,26 @@ impl<'a> App<'a> {
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
-        // Wake once to clear the toast, then return to blocking reads while idle.
-        if let Some(toast) = &self.state.toast
-            && !event::poll(toast.expires_at.saturating_duration_since(Instant::now()))?
+        // Poll only while searching or waiting for a toast to expire. Idle reads
+        // still block, so adding background search does not introduce busy work.
+        let timeout = self
+            .state
+            .toast
+            .as_ref()
+            .map(|toast| toast.expires_at.saturating_duration_since(Instant::now()));
+        let timeout = if self.search_worker.is_running() {
+            Some(timeout.map_or(Duration::from_millis(50), |timeout| {
+                timeout.min(Duration::from_millis(50))
+            }))
+        } else {
+            timeout
+        };
+        if let Some(timeout) = timeout
+            && !event::poll(timeout)?
         {
-            self.state.toast = None;
+            if self.state.toast().is_none() {
+                self.state.toast = None;
+            }
             return Ok(());
         }
         match event::read()? {
@@ -345,6 +364,28 @@ impl<'a> App<'a> {
         clipboard: &mut impl io::Write,
     ) {
         self.state.toast = None;
+        let repeating_find = self.state.visualize().prompt().is_none()
+            && matches!(key_event.code, KeyCode::Char('n' | 'N'))
+            && !key_event
+                .modifiers
+                .intersects(event::KeyModifiers::CONTROL | event::KeyModifiers::ALT);
+        if repeating_find {
+            // Apply a completed hit before starting the next step. Key repeat
+            // during an unfinished scan must not continually restart that scan.
+            self.poll_search();
+            if self.search_worker.is_running() {
+                return;
+            }
+        }
+        // A fresh command or navigation must never be overwritten by a late
+        // search result. The pattern/highlights survive cancellation.
+        if self.search_worker.is_running() {
+            self.search_worker.cancel();
+            self.state.visualize_mut().search_status = Some("Search cancelled".into());
+            if key_event.code == KeyCode::Esc {
+                return;
+            }
+        }
         let outcome = self
             .tabs
             .active_tab()
@@ -352,6 +393,13 @@ impl<'a> App<'a> {
             .unwrap();
         match outcome {
             EventOutcome::Consumed => return,
+            EventOutcome::FindCell {
+                backwards,
+                include_current,
+            } => {
+                self.start_search(backwards, include_current);
+                return;
+            }
             EventOutcome::CopyCell => {
                 let result = self.parquet_ctx.sample_data.clipboard_value(
                     self.state.vertical_offset(),
@@ -390,7 +438,74 @@ impl<'a> App<'a> {
     }
 
     fn exit(&mut self) {
+        self.search_worker.cancel();
         self.exit = true;
+    }
+
+    fn start_search(&mut self, backwards: bool, include_current: bool) {
+        let Some(pattern) = self.state.visualize().search.clone() else {
+            return;
+        };
+        if self.parquet_ctx.sample_data_error.is_some() {
+            self.state.visualize_mut().search_status =
+                Some("Search unavailable: preview could not be read".into());
+            return;
+        }
+        let data = &self.parquet_ctx.sample_data;
+        let visualize = self.state.visualize();
+        let columns = (0..visualize.column_count(data.total_columns))
+            .filter_map(|index| visualize.source_column(index))
+            .filter_map(|index| data.flattened_columns.get(index).cloned())
+            .collect();
+        let request = SearchRequest {
+            path: self.parquet_ctx.file_path.clone(),
+            columns,
+            total_rows: data.total_rows,
+            pattern,
+            row: self.state.vertical_offset(),
+            column: visualize.selected_column,
+            backwards,
+            include_current,
+        };
+        match self.search_worker.start(request) {
+            Ok(()) => {
+                self.state.visualize_mut().search_status = Some("Searching… Esc cancels".into())
+            }
+            Err(error) => {
+                self.state.visualize_mut().search_status = Some(format!("Search failed: {error}"))
+            }
+        }
+    }
+
+    fn poll_search(&mut self) {
+        if let Some(result) = self.search_worker.poll() {
+            let status = match result {
+                Ok(Some(hit)) => {
+                    self.state.jump_to_row(
+                        hit.row,
+                        self.state.visible_data_rows(),
+                        self.parquet_ctx.sample_data.total_rows,
+                    );
+                    let visualize = self.state.visualize_mut();
+                    visualize.selected_column = hit.column;
+                    visualize.column_name_scroll = 0;
+                    visualize.selection_mode = SelectionMode::Cell;
+                    hit.wrapped.then(|| "Search wrapped".to_string())
+                }
+                Ok(None) => Some("No matches".into()),
+                Err(error) => Some(format!("Search failed: {error}")),
+            };
+            self.state.visualize_mut().search_status = status;
+        } else if self.search_worker.is_running() {
+            let scanned = self
+                .search_worker
+                .scanned_rows()
+                .min(self.parquet_ctx.sample_data.total_rows);
+            self.state.visualize_mut().search_status = Some(format!(
+                "Searching… {scanned}/{} rows · Esc cancels",
+                self.parquet_ctx.sample_data.total_rows
+            ));
+        }
     }
 }
 
@@ -404,6 +519,232 @@ mod tests {
         backend::TestBackend,
         style::{Color, Modifier},
     };
+
+    fn set_search(app: &mut App<'_>, expression: &str) {
+        app.handle_key_event(KeyCode::Char('/').into());
+        let count = app
+            .state
+            .visualize()
+            .prompt()
+            .unwrap()
+            .buffer
+            .chars()
+            .count();
+        app.handle_key_event(KeyCode::Home.into());
+        for _ in 0..count {
+            app.handle_key_event(KeyCode::Delete.into());
+        }
+        for character in expression.chars() {
+            app.handle_key_event(KeyCode::Char(character).into());
+        }
+        app.handle_key_event(KeyCode::Enter.into());
+    }
+
+    fn finish_search(app: &mut App<'_>) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.search_worker.is_running() {
+            assert!(Instant::now() < deadline, "search did not finish");
+            app.poll_search();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn find_navigates_all_columns_then_respects_reordered_projection_and_keeps_rows() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let expected: Vec<_> =
+            ctx.sample_data
+                .loaded()
+                .rows
+                .iter()
+                .enumerate()
+                .flat_map(|(row, cells)| {
+                    cells.iter().enumerate().filter_map(move |(column, value)| {
+                        (value == "true").then_some((row, column))
+                    })
+                })
+                .collect();
+        assert!(expected.len() > 1);
+        let mut app = App::new(&ctx);
+        set_search(&mut app, "^true$");
+        finish_search(&mut app);
+        let cursor = |app: &App<'_>| {
+            (
+                app.state.vertical_offset(),
+                app.state.visualize().selected_column,
+            )
+        };
+        assert_eq!(cursor(&app), expected[0]);
+        assert_eq!(app.state.visualize().selection_mode, SelectionMode::Cell);
+        assert_eq!(app.state.visualize().projection(), None);
+        app.handle_key_event(KeyCode::Char('n').into());
+        finish_search(&mut app);
+        assert_eq!(cursor(&app), expected[1]);
+        app.handle_key_event(KeyCode::Char('N').into());
+        finish_search(&mut app);
+        assert_eq!(cursor(&app), expected[0]);
+        app.handle_key_event(KeyCode::Char('N').into());
+        finish_search(&mut app);
+        assert_eq!(cursor(&app), *expected.last().unwrap());
+        assert_eq!(
+            app.state.visualize().search_status.as_deref(),
+            Some("Search wrapped")
+        );
+        let mut clipboard = Vec::new();
+        app.handle_key_event_with_clipboard(KeyCode::Char('y').into(), &mut clipboard);
+        assert!(!clipboard.is_empty());
+
+        let names = &ctx.sample_data.flattened_columns;
+        set_column_filter(
+            &mut app,
+            &format!(
+                "^{}$|^{}$",
+                regex::escape(&names[expected[0].1]),
+                regex::escape(&names[0])
+            ),
+        );
+        app.state.jump_to_top();
+        app.state.visualize_mut().selected_column = 0;
+        set_search(&mut app, "^true$");
+        finish_search(&mut app);
+        assert_eq!(cursor(&app), (expected[0].0, 0));
+        app.prepare_viewport(Size::new(30, 9));
+        let mut terminal = Terminal::new(TestBackend::new(30, 9)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+            .unwrap();
+        assert!((9..30).any(|x| terminal.backend().buffer()[(x, 5)].fg == Color::Red));
+        for key in [KeyCode::Tab, KeyCode::BackTab] {
+            app.handle_key_event(key.into());
+            assert!(app.state.visualize().search.is_some());
+        }
+        set_column_filter(&mut app, &format!("^{}$", regex::escape(&names[0])));
+        let before = cursor(&app);
+        set_search(&mut app, "^true$");
+        finish_search(&mut app);
+        assert_eq!(cursor(&app), before);
+        assert_eq!(
+            app.state.visualize().search_status.as_deref(),
+            Some("No matches")
+        );
+        assert_eq!(ctx.sample_data.total_rows, 8);
+        set_search(&mut app, "");
+        assert!(app.state.visualize().search.is_none());
+        assert!(!app.search_worker.is_running());
+    }
+
+    #[test]
+    fn search_cancellation_keeps_cursor_and_drops_results_after_navigation() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        app.state.jump_to_row(3, 4, 8);
+        set_search(&mut app, ".");
+        assert!(app.search_worker.is_running());
+        app.handle_key_event(KeyCode::Esc.into());
+        assert!(!app.search_worker.is_running());
+        assert_eq!(app.state.vertical_offset(), 3);
+        assert!(app.state.visualize().search.is_some());
+        app.poll_search();
+        assert_eq!(app.state.vertical_offset(), 3);
+        app.handle_key_event(KeyCode::Char('n').into());
+        app.handle_key_event(KeyCode::Down.into());
+        assert!(!app.search_worker.is_running());
+        assert_eq!(app.state.vertical_offset(), 4);
+        app.poll_search();
+        assert_eq!(app.state.vertical_offset(), 4);
+        app.handle_key_event(KeyCode::Char('n').into());
+        app.handle_key_event(KeyCode::Tab.into());
+        assert!(!app.search_worker.is_running());
+        assert_eq!(app.tabs.active_tab().to_string(), "Metadata");
+        assert!(app.state.visualize().search.is_some());
+    }
+
+    #[test]
+    fn clearing_search_restores_row_selection_and_footer_at_the_current_position() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        for filtered in [false, true] {
+            let mut app = App::new(&ctx);
+            if filtered {
+                set_column_filter(&mut app, "^id$|^bool_col$");
+            }
+            set_search(&mut app, "^true$");
+            finish_search(&mut app);
+            app.handle_key_event(KeyCode::Char('n').into());
+            finish_search(&mut app);
+            app.prepare_viewport(Size::new(80, 8));
+            assert_eq!(app.state.visualize().selection_mode, SelectionMode::Cell);
+            app.state.visualize_mut().column_name_scroll = 3;
+            let row = app.state.vertical_offset();
+            let vertical_scroll = app.state.data_vertical_scroll();
+            let horizontal_scroll = app.state.horizontal_offset();
+            let projection = app.state.visualize().projection().map(<[usize]>::to_vec);
+
+            set_search(&mut app, "");
+            app.prepare_viewport(Size::new(80, 8));
+
+            assert!(app.state.visualize().search.is_none());
+            assert!(app.state.visualize().search_status.is_none());
+            assert_eq!(app.state.visualize().selection_mode, SelectionMode::Row);
+            assert_eq!(app.state.visualize().selected_column, horizontal_scroll);
+            assert_eq!(app.state.visualize().column_name_scroll, 0);
+            assert_eq!(app.state.vertical_offset(), row);
+            assert_eq!(app.state.data_vertical_scroll(), vertical_scroll);
+            assert_eq!(app.state.horizontal_offset(), horizontal_scroll);
+            assert_eq!(app.state.visualize().projection(), projection.as_deref());
+            let footer = footer(&app).0;
+            assert!(!footer.contains("Col:"), "{footer}");
+            assert!(
+                footer.starts_with(if filtered { "Columns:" } else { "parqeye" }),
+                "{footer}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_find_keys_apply_completed_hits_and_do_not_starve_the_worker() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        set_search(&mut app, "^true$");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        // Deliberately do not call poll_search: each repeated key must accept a
+        // completed result before stepping again, even faster than the UI tick.
+        while app.state.vertical_offset() == 0 && app.state.visualize().selected_column == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "repeated n prevented search progress"
+            );
+            app.handle_key_event(KeyCode::Char('n').into());
+            std::thread::yield_now();
+        }
+        finish_search(&mut app);
+        let source = app
+            .state
+            .visualize()
+            .source_column(app.state.visualize().selected_column)
+            .unwrap();
+        assert_eq!(
+            ctx.sample_data
+                .clipboard_value(app.state.vertical_offset(), source)
+                .unwrap(),
+            "true"
+        );
+    }
 
     fn set_column_filter(app: &mut App<'_>, expression: &str) {
         app.handle_key_event(KeyCode::Char('*').into());

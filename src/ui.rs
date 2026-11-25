@@ -26,6 +26,9 @@ fn prompt_prefix(prompt: &CommandPrompt, width: u16) -> &'static str {
         PromptKind::Columns if width >= 40 => "* regex: ",
         PromptKind::Columns => "*",
         PromptKind::GoToRow => ":",
+        PromptKind::Find if width >= 72 => "/ Find (regex, ignore case): ",
+        PromptKind::Find if width >= 40 => "/ regex: ",
+        PromptKind::Find => "/",
     }
 }
 
@@ -233,6 +236,10 @@ impl<'a> AppWidget<'a> {
                 "e.g. ^exact_name$, a|^pre|suffix$"
                     .dim()
                     .render(layout.input_area, buf);
+            } else if prompt.kind == PromptKind::Find && prompt.buffer.is_empty() {
+                "e.g. error, ^exact value$, error|timeout"
+                    .dim()
+                    .render(layout.input_area, buf);
             } else {
                 Line::from(layout.input).render(layout.input_area, buf);
             }
@@ -268,6 +275,33 @@ impl<'a> AppWidget<'a> {
     }
 
     fn visualize_footer(&self, width: u16) -> Option<Line<'_>> {
+        let visualize = self.0.state().visualize();
+        if let Some(search) = &visualize.search {
+            let context = (width >= 72)
+                .then(|| self.visualize_column_footer(width / 3))
+                .flatten();
+            let search_width =
+                width.saturating_sub(context.as_ref().map_or(0, |line| line.width() as u16 + 3));
+            let status = visualize
+                .search_status
+                .as_deref()
+                .unwrap_or("n/N: next/previous · / then empty Enter: clear");
+            let expression = truncate_cell(search.expression(), (search_width / 3).max(1));
+            let label = format!("/{expression} | {status}");
+            let mut spans = vec![Span::styled(
+                truncate_cell(&label, search_width).into_owned(),
+                Style::default().fg(Color::Yellow),
+            )];
+            if let Some(context) = context {
+                spans.push(" | ".dim());
+                spans.extend(context.spans);
+            }
+            return Some(Line::from(spans));
+        }
+        self.visualize_column_footer(width)
+    }
+
+    fn visualize_column_footer(&self, width: u16) -> Option<Line<'_>> {
         let visualize = self.0.state().visualize();
         let data = &self.0.parquet_ctx.sample_data;
         let name = (visualize.selection_mode != SelectionMode::Row)
@@ -433,6 +467,7 @@ impl<'a> AppWidget<'a> {
         DataTable::new(data)
             .with_width_cache(&visualize.column_widths)
             .with_projection(visualize.projection())
+            .with_search(visualize.search.as_ref())
             .with_horizontal_scroll(self.0.state().horizontal_offset())
             .with_vertical_scroll(self.0.state().data_vertical_scroll())
             .with_selected_row(Some(self.0.state().vertical_offset()))
@@ -521,7 +556,7 @@ mod tests {
 
     #[test]
     fn prompt_feedback_leaves_space_for_input_and_its_cursor() {
-        for kind in [PromptKind::Columns, PromptKind::GoToRow] {
+        for kind in [PromptKind::Columns, PromptKind::GoToRow, PromptKind::Find] {
             let mut prompt = CommandPrompt::new(kind);
             prompt.buffer = "資料_customer_".repeat(30);
             prompt.column_matches = Some(vec![0, 2]);

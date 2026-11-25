@@ -11,6 +11,7 @@ use std::fmt;
 pub enum PromptKind {
     GoToRow,
     Columns,
+    Find,
 }
 
 impl PromptKind {
@@ -18,6 +19,7 @@ impl PromptKind {
         match self {
             Self::GoToRow => ':',
             Self::Columns => '*',
+            Self::Find => '/',
         }
     }
 }
@@ -161,6 +163,7 @@ pub enum PromptEvent {
 pub enum VisualizeCommand {
     GoToRow(usize),
     FilterColumns(String),
+    Find(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,6 +184,7 @@ impl fmt::Display for CommandParseError {
 pub fn parse_command(kind: PromptKind, input: &str) -> Result<VisualizeCommand, CommandParseError> {
     match kind {
         PromptKind::Columns => Ok(VisualizeCommand::FilterColumns(input.to_string())),
+        PromptKind::Find => Ok(VisualizeCommand::Find(input.to_string())),
         PromptKind::GoToRow => {
             let input = input.trim();
             if input.is_empty() {
@@ -248,7 +252,7 @@ pub fn match_columns(input: &str, names: &[String]) -> Result<Vec<usize>, String
     }
 }
 
-fn invalid_regex(error: impl fmt::Display) -> String {
+pub(super) fn invalid_regex(error: impl fmt::Display) -> String {
     format!(
         "Invalid regex: {}",
         error

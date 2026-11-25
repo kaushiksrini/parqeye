@@ -1,5 +1,5 @@
-use std::cell::{Ref, RefCell};
-use std::sync::Mutex;
+use std::cell::{Cell, Ref, RefCell};
+use std::sync::Once;
 
 use polars::prelude::*;
 
@@ -8,8 +8,12 @@ type LoadedRows = (Vec<Vec<String>>, Vec<String>);
 const WINDOW_ROWS: usize = 2000;
 const ROW_PREFETCH: usize = 500;
 
-/// Serializes temporary replacement of the process-wide panic hook.
-static POLARS_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
+// Suppress caught Polars panics only on the calling thread. Background searches
+// and foreground window/clipboard reads must not serialize on a panic-hook lock.
+static POLARS_PANIC_HOOK: Once = Once::new();
+thread_local! {
+    static CATCHING_POLARS_PANIC: Cell<bool> = const { Cell::new(false) };
+}
 
 /// The currently materialized slice of rows: `rows[i]` is the file row at
 /// absolute index `start + i`.
@@ -143,6 +147,40 @@ impl ParquetSampleData {
         self.window.borrow()
     }
 
+    /// A bounded, projected search chunk, formatted exactly like table cells.
+    /// The worker owns these rows; the UI's loaded window is left untouched.
+    pub(crate) fn search_rows(
+        file_path: &str,
+        offset: usize,
+        len: usize,
+        names: &[String],
+    ) -> Result<Vec<Vec<String>>, String> {
+        catch_polars_panic(|| {
+            let df = LazyFrame::scan_parquet(PlRefPath::new(file_path), Default::default())?
+                .slice(offset as i64, len as IdxSize)
+                // Source names are literal, even "*" or "^name$". col(name)
+                // would interpret those as selectors and could reorder matches.
+                .select(
+                    names
+                        .iter()
+                        .map(|name| Expr::Column(name.as_str().into()))
+                        .collect::<Vec<_>>(),
+                )
+                .collect()?;
+            Ok((0..df.height())
+                .map(|row| {
+                    df.columns()
+                        .iter()
+                        .map(|column| {
+                            Self::get_value_as_string(column.as_materialized_series(), row)
+                        })
+                        .collect()
+                })
+                .collect())
+        })
+        .map_err(|error| error.to_string())
+    }
+
     /// Fetch the original value, since formatted window rows can abbreviate lists
     /// and binary data. Project and slice the scan to just the selected cell.
     pub fn clipboard_value(
@@ -246,13 +284,17 @@ fn cell_json(value: AnyValue<'_>) -> PolarsResult<serde_json::Value> {
 fn catch_polars_panic<T>(
     operation: impl FnOnce() -> Result<T, Box<dyn std::error::Error>> + std::panic::UnwindSafe,
 ) -> Result<T, Box<dyn std::error::Error>> {
-    let _lock = POLARS_PANIC_HOOK_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
+    POLARS_PANIC_HOOK.call_once(|| {
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !CATCHING_POLARS_PANIC.get() {
+                previous_hook(info);
+            }
+        }));
+    });
+    let previous = CATCHING_POLARS_PANIC.replace(true);
     let result = std::panic::catch_unwind(operation);
-    std::panic::set_hook(previous_hook);
+    CATCHING_POLARS_PANIC.set(previous);
 
     match result {
         Ok(result) => result,
@@ -280,6 +322,27 @@ mod tests {
 
     fn wide_file() -> String {
         test_data_path("alltypes_tiny_pages.parquet")
+    }
+
+    #[test]
+    fn search_projection_treats_special_column_names_literally_and_preserves_order() {
+        let path = std::env::temp_dir().join(format!(
+            "parqeye_search_names_{}.parquet",
+            std::process::id()
+        ));
+        let mut frame = df!["*" => ["star"], "^x$" => ["anchor"], "x" => ["ordinary"]].unwrap();
+        ParquetWriter::new(std::fs::File::create(&path).unwrap())
+            .finish(&mut frame)
+            .unwrap();
+        let rows = ParquetSampleData::search_rows(
+            path.to_str().unwrap(),
+            0,
+            1,
+            &["^x$".into(), "*".into()],
+        )
+        .unwrap();
+        assert_eq!(rows, vec![vec!["anchor", "star"]]);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

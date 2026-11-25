@@ -11,9 +11,11 @@ use crate::{
 };
 
 mod command;
+pub(crate) mod search;
 
 pub use command::{CommandPrompt, PromptKind};
 use command::{PromptEvent, VisualizeCommand, parse_command};
+use search::SearchPattern;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct VisualizeState {
@@ -21,6 +23,8 @@ pub struct VisualizeState {
     pub selection_mode: SelectionMode,
     pub selected_column: usize,
     pub column_filter: Option<String>,
+    pub(crate) search: Option<SearchPattern>,
+    pub(crate) search_status: Option<String>,
     projection: Option<Vec<usize>>,
     pub column_name_scroll: usize,
     pub(crate) column_widths: RefCell<ColumnWidthCache>,
@@ -49,6 +53,13 @@ impl VisualizeState {
         let mut prompt = CommandPrompt::new(kind);
         if kind == PromptKind::Columns {
             prompt.buffer = self.column_filter.clone().unwrap_or_default();
+            prompt.cursor = prompt.buffer.len();
+        }
+        if kind == PromptKind::Find {
+            prompt.buffer = self
+                .search
+                .as_ref()
+                .map_or_else(String::new, |s| s.expression().into());
             prompt.cursor = prompt.buffer.len();
         }
         self.mode = VisualizeMode::Prompt(prompt);
@@ -151,6 +162,25 @@ impl VisualizeTab {
         state: &mut AppState,
     ) -> Result<(), String> {
         match command {
+            VisualizeCommand::Find(expression) => {
+                let search = if expression.is_empty() {
+                    None
+                } else {
+                    Some(SearchPattern::new(&expression)?)
+                };
+                let horizontal_offset = state.horizontal_offset();
+                let visualize = state.visualize_mut();
+                if search.is_none() {
+                    // Find enters Cell mode. Clearing it returns to ordinary
+                    // row browsing without moving the current viewport.
+                    visualize.selection_mode = SelectionMode::Row;
+                    visualize.selected_column = horizontal_offset;
+                    visualize.column_name_scroll = 0;
+                }
+                visualize.search = search;
+                visualize.search_status = None;
+                Ok(())
+            }
             VisualizeCommand::FilterColumns(expression) => {
                 let prompt = state
                     .visualize()
@@ -172,6 +202,7 @@ impl VisualizeTab {
                 let visualize = state.visualize_mut();
                 visualize.selected_column = selected;
                 visualize.column_name_scroll = 0;
+                visualize.search_status = None;
                 if expression.is_empty() {
                     visualize.column_filter = None;
                     visualize.projection = None;
@@ -222,7 +253,15 @@ impl VisualizeTab {
                     .and_then(|command| self.execute_command(command, state));
 
                 match result {
-                    Ok(()) => state.visualize_mut().cancel_prompt(),
+                    Ok(()) => {
+                        state.visualize_mut().cancel_prompt();
+                        if kind == PromptKind::Find && state.visualize().search.is_some() {
+                            return EventOutcome::FindCell {
+                                backwards: false,
+                                include_current: true,
+                            };
+                        }
+                    }
                     Err(error) => {
                         if let Some(prompt) = state.visualize_mut().prompt_mut() {
                             prompt.error = Some(error);
@@ -254,6 +293,25 @@ impl Tab for VisualizeTab {
         let selection_mode = state.visualize().selection_mode;
 
         let outcome = match key_event.code {
+            KeyCode::Char('/') => {
+                state.visualize_mut().begin_prompt(PromptKind::Find);
+                EventOutcome::Consumed
+            }
+            KeyCode::Char('n' | 'N')
+                if !key_event
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                if state.visualize().search.is_none() {
+                    state.show_toast("No search pattern (press /)", true);
+                    EventOutcome::Consumed
+                } else {
+                    EventOutcome::FindCell {
+                        backwards: key_event.code == KeyCode::Char('N'),
+                        include_current: false,
+                    }
+                }
+            }
             KeyCode::Char('*') => {
                 state.visualize_mut().begin_prompt(PromptKind::Columns);
                 state
@@ -416,6 +474,8 @@ impl Tab for VisualizeTab {
 
     fn instructions(&self) -> Vec<Line<'static>> {
         vec![
+            Line::from(vec!["/".green(), " : Find".into()]),
+            Line::from(vec!["n/N".green(), " : Next/previous match".into()]),
             Line::from(vec!["*".green(), " : Columns".into()]),
             Line::from(vec!["Alt-←/→".green(), " : Scroll name".into()]),
             Line::from(vec!["y".green(), " : Yank cell".into()]),
@@ -452,6 +512,73 @@ impl Tab for VisualizeTab {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn find_prompt_validates_preserves_and_clears_the_pattern_without_filtering() {
+        let tab = VisualizeTab::new().with_max_columns(3).with_max_rows(10);
+        let mut state = AppState::new();
+        state.jump_to_row(4, 3, 10);
+        tab.on_event(key(KeyCode::Char('n')), &mut state).unwrap();
+        assert!(state.toast().unwrap().is_error);
+        tab.on_event(key(KeyCode::Char('/')), &mut state).unwrap();
+        for ch in "^érror$".chars() {
+            tab.on_event(key(KeyCode::Char(ch)), &mut state).unwrap();
+        }
+        assert_eq!(
+            tab.on_event(key(KeyCode::Enter), &mut state).unwrap(),
+            EventOutcome::FindCell {
+                backwards: false,
+                include_current: true
+            }
+        );
+        assert!(state.visualize().search.as_ref().unwrap().is_match("ÉRROR"));
+        assert_eq!(state.vertical_offset(), 4);
+        assert_eq!(state.visualize().projection(), None);
+        for (ch, backwards) in [('n', false), ('N', true)] {
+            assert_eq!(
+                tab.on_event(key(KeyCode::Char(ch)), &mut state).unwrap(),
+                EventOutcome::FindCell {
+                    backwards,
+                    include_current: false
+                }
+            );
+        }
+        // Invalid submissions preserve the active search and consume global keys.
+        tab.on_event(key(KeyCode::Char('/')), &mut state).unwrap();
+        assert_eq!(state.visualize().prompt().unwrap().buffer, "^érror$");
+        let prompt = state.visualize_mut().prompt_mut().unwrap();
+        prompt.buffer = "[".into();
+        prompt.cursor = 1;
+        tab.on_event(key(KeyCode::Enter), &mut state).unwrap();
+        assert!(
+            state
+                .visualize()
+                .prompt()
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .starts_with("Invalid regex:")
+        );
+        assert_eq!(
+            tab.on_event(key(KeyCode::Tab), &mut state).unwrap(),
+            EventOutcome::Consumed
+        );
+        tab.on_event(key(KeyCode::Esc), &mut state).unwrap();
+        assert_eq!(
+            state.visualize().search.as_ref().unwrap().expression(),
+            "^érror$"
+        );
+        state.reset();
+        assert!(state.visualize().search.is_some());
+        tab.on_event(key(KeyCode::Char('/')), &mut state).unwrap();
+        let prompt = state.visualize_mut().prompt_mut().unwrap();
+        prompt.buffer.clear();
+        prompt.cursor = 0;
+        tab.on_event(key(KeyCode::Enter), &mut state).unwrap();
+        assert!(state.visualize().search.is_none());
+        assert!(state.visualize().prompt().is_none());
+    }
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
