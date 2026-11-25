@@ -451,10 +451,10 @@ impl Tab for VisualizeTab {
             HelpSection {
                 title: "Navigation and selection",
                 commands: &[
-                    ("↑ / ↓", "Move between rows or scroll in column mode."),
+                    ("↑ / ↓", "Scroll vertically."),
                     (
                         "← / →",
-                        "Scroll in row mode. Select a column in column or cell mode.",
+                        "Scroll horizontally.",
                     ),
                     (
                         "PgUp / PgDn",
@@ -464,7 +464,7 @@ impl Tab for VisualizeTab {
                     ("v", "Switch between row, column and cell selection."),
                     (
                         "y",
-                        "Copy the selected cell. Use cell mode or show one column.",
+                        "Copy the selected cell (in cell mode)",
                     ),
                 ],
             },
@@ -473,17 +473,17 @@ impl Tab for VisualizeTab {
                 commands: &[
                     (
                         "/",
-                        "Search visible columns with a regex that ignores case. Try error|timeout.",
+                        "Case insensitive regex cell match. E.g. uid|^prefix|suffix$",
                     ),
                     (
                         "n / N",
-                        "Jump to the next or previous match. Search wraps at the end.",
+                        "Jump to the next / previous match",
                     ),
                     (
                         "*",
-                        "Choose and order columns with a regex that ignores case. Try ^id$|name.",
+                        "Choose and order columns with a regex that ignores case. E.g. ^id$|name$",
                     ),
-                    (":", "Go to a row number starting at 1. Try :42."),
+                    (":", "Go to specific row number. E.g. :42"),
                     ("Esc", "Cancel a running search."),
                 ],
             },

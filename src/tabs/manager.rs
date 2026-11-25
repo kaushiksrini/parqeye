@@ -77,7 +77,7 @@ impl TabManager {
     pub fn render_instructions(&self, area: Rect, buf: &mut Buffer) {
         let instructions = [
             Line::from(vec!["[Tab]".green(), " Toggle Mode".into()]),
-            Line::from(vec!["[?]".cyan(), " Help".into()]),
+            Line::from(vec!["[?]".yellow(), " Help".into()]),
             Line::from(vec!["[Q]".blue(), "uit".into()]),
         ];
 

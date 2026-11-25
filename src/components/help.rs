@@ -149,7 +149,7 @@ impl Widget for HelpModal<'_> {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Color::Cyan)
+            .border_style(Color::Yellow)
             .title(format!(" {} - Help ", self.tab.to_string()).bold());
         block.render(layout.area, buf);
 
