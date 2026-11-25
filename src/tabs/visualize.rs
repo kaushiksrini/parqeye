@@ -452,20 +452,14 @@ impl Tab for VisualizeTab {
                 title: "Navigation and selection",
                 commands: &[
                     ("↑ / ↓", "Scroll vertically."),
-                    (
-                        "← / →",
-                        "Scroll horizontally.",
-                    ),
+                    ("← / →", "Scroll horizontally."),
                     (
                         "PgUp / PgDn",
                         "Move up or down one page. Ctrl+u and Ctrl+d also work.",
                     ),
                     ("g / G or Home / End", "Jump to the first or last row."),
                     ("v", "Switch between row, column and cell selection."),
-                    (
-                        "y",
-                        "Copy the selected cell (in cell mode)",
-                    ),
+                    ("y", "Copy the selected cell (in cell mode)"),
                 ],
             },
             HelpSection {
@@ -475,10 +469,7 @@ impl Tab for VisualizeTab {
                         "/",
                         "Case insensitive regex cell match. E.g. uid|^prefix|suffix$",
                     ),
-                    (
-                        "n / N",
-                        "Jump to the next / previous match",
-                    ),
+                    ("n / N", "Jump to the next / previous match"),
                     (
                         "*",
                         "Choose and order columns with a regex that ignores case. E.g. ^id$|name$",

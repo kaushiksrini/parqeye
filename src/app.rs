@@ -466,7 +466,7 @@ impl<'a> App<'a> {
     fn handle_help_key(&mut self, key_event: KeyEvent) {
         let help = self.state.help.as_mut().expect("help must be open");
         match key_event.code {
-            KeyCode::Esc | KeyCode::Char('?') => self.state.help = None,
+            KeyCode::Char('?') => self.state.help = None,
             KeyCode::Char('q' | 'Q') => self.exit(),
             KeyCode::Up => help.scroll = help.scroll.saturating_sub(1),
             KeyCode::Down => help.scroll = help.scroll.saturating_add(1).min(help.max_scroll),
@@ -1232,10 +1232,12 @@ mod tests {
             assert_eq!(app.state.vertical_offset(), row);
             assert_eq!(app.state.horizontal_offset(), column);
             assert_eq!(app.state.visualize(), &selection);
+            let help_scroll = app.state.help().unwrap().scroll;
             app.handle_key_event(KeyCode::Esc.into());
-            assert!(app.state.help().is_none());
+            assert_eq!(app.state.help().unwrap().scroll, help_scroll);
             assert_eq!(app.state.vertical_offset(), row);
-            app.handle_key_event(KeyCode::Char('?').into());
+            assert_eq!(app.state.horizontal_offset(), column);
+            assert_eq!(app.state.visualize(), &selection);
             app.handle_key_event(KeyCode::Char('?').into());
             assert!(app.state.help().is_none());
         }
@@ -1337,7 +1339,7 @@ mod tests {
             assert!(text.contains(section), "{text}");
             assert!(text.contains("Across all tabs"));
             assert_eq!(text.contains("Find, columns and row commands"), tab == 0);
-            assert!(text.contains("Esc / ? close"));
+            assert!(text.contains("[?] Close"));
 
             for (width, height) in [
                 (0, 0),

@@ -25,7 +25,7 @@ const COMMON: HelpSection = HelpSection {
     commands: &[
         ("Tab / Shift+Tab", "Switch to the next or previous tab."),
         ("?", "Open or close help for this tab."),
-        ("Esc", "Close help or reset navigation."),
+        ("Esc", "Reset navigation while browsing."),
         ("q / Q", "Quit parqeye."),
     ],
 };
@@ -175,7 +175,7 @@ impl Widget for HelpModal<'_> {
                 1,
             );
             let status = Rect::new(controls.x, controls.y + 1, controls.width, 1);
-            "Esc / ? close | [q]uit".dim().render(controls, buf);
+            "[?] Close | [q]uit".dim().render(controls, buf);
             if max_scroll > 0 {
                 format!(
                     "↑/↓ PgUp/PgDn scroll | Home/End | {}-{}/{total}",
