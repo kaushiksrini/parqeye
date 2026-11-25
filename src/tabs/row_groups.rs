@@ -1,10 +1,9 @@
+use crate::components::help::HelpSection;
 use crate::{
     app::AppState,
     tabs::{EventOutcome, Tab},
 };
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use std::io;
 
 pub struct RowGroupsTab {
@@ -81,21 +80,18 @@ impl Tab for RowGroupsTab {
         Ok(outcome)
     }
 
-    fn instructions(&self) -> Vec<Line<'static>> {
-        vec![
-            Line::from(vec![
-                "→".green(),
-                "/".white(),
-                "←".blue(),
-                " : Iterate Row Groups".into(),
-            ]),
-            Line::from(vec![
-                "↑".green(),
-                "/".white(),
-                "↓".blue(),
-                " : Schema".into(),
-            ]),
-        ]
+    fn help(&self) -> &'static [HelpSection] {
+        &[HelpSection {
+            title: "Inspect row groups",
+            commands: &[
+                ("← / →", "Switch to the previous or next row group."),
+                (
+                    "↑ / ↓",
+                    "Select a column for statistics and page details. Select the root for an overview.",
+                ),
+                ("PgUp / PgDn", "Move up or down one page of columns."),
+            ],
+        }]
     }
 
     fn to_string(&self) -> String {

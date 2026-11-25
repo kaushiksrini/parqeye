@@ -1,7 +1,6 @@
 use crate::components::data_table::ColumnWidthCache;
+use crate::components::help::HelpSection;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use std::cell::RefCell;
 use std::io;
 
@@ -447,33 +446,65 @@ impl Tab for VisualizeTab {
         Ok(outcome)
     }
 
-    fn instructions(&self) -> Vec<Line<'static>> {
-        vec![
-            Line::from(vec!["y".green(), " : Yank cell".into()]),
-            Line::from(vec!["v".green(), " : Selection".into()]),
-            Line::from(vec!["↑".green(), "/".white(), "↓".blue(), " : Row".into()]),
-            Line::from(vec![
-                "→".green(),
-                "/".white(),
-                "←".blue(),
-                " : Column".into(),
-            ]),
-            Line::from(vec![
-                "Ctrl-u".green(),
-                "/".white(),
-                "Ctrl-d".blue(),
-                " : Page".into(),
-            ]),
-            Line::from(vec![
-                "g".green(),
-                "/".white(),
-                "G".blue(),
-                " : Top/Bottom".into(),
-            ]),
-            Line::from(vec![":".green(), " : Go to row".into()]),
-            Line::from(vec!["*".green(), " Cols".into()]),
-            Line::from(vec!["/".green(), " Find".into()]),
-            Line::from(vec!["n/N".green()]),
+    fn help(&self) -> &'static [HelpSection] {
+        &[
+            HelpSection {
+                title: "Navigation and selection",
+                commands: &[
+                    ("↑ / ↓", "Move between rows or scroll in column mode."),
+                    (
+                        "← / →",
+                        "Scroll in row mode. Select a column in column or cell mode.",
+                    ),
+                    (
+                        "PgUp / PgDn",
+                        "Move up or down one page. Ctrl+u and Ctrl+d also work.",
+                    ),
+                    ("g / G or Home / End", "Jump to the first or last row."),
+                    ("v", "Switch between row, column and cell selection."),
+                    (
+                        "y",
+                        "Copy the selected cell. Use cell mode or show one column.",
+                    ),
+                ],
+            },
+            HelpSection {
+                title: "Find, columns and row commands",
+                commands: &[
+                    (
+                        "/",
+                        "Search visible columns with a regex that ignores case. Try error|timeout.",
+                    ),
+                    (
+                        "n / N",
+                        "Jump to the next or previous match. Search wraps at the end.",
+                    ),
+                    (
+                        "*",
+                        "Choose and order columns with a regex that ignores case. Try ^id$|name.",
+                    ),
+                    (":", "Go to a row number starting at 1. Try :42."),
+                    ("Esc", "Cancel a running search."),
+                ],
+            },
+            HelpSection {
+                title: "While entering a command",
+                commands: &[
+                    ("Enter", "Apply the command."),
+                    ("Esc / Ctrl+c", "Cancel the command."),
+                    ("← / →, Home / End", "Move the text cursor."),
+                    (
+                        "Backspace / Delete",
+                        "Delete text. Backspace closes an empty command.",
+                    ),
+                    ("Empty / + Enter", "Clear the search."),
+                    ("Empty * + Enter", "Show all columns."),
+                    (
+                        "? / q",
+                        "Type these characters as text. Press Esc to use shortcuts.",
+                    ),
+                ],
+            },
         ]
     }
 

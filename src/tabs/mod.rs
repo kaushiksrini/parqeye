@@ -10,8 +10,8 @@ pub use schema::SchemaTab;
 pub use visualize::VisualizeTab;
 
 use crate::app::AppState;
+use crate::components::help::HelpSection;
 use crossterm::event::KeyEvent;
-use ratatui::text::Line;
 use std::io;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,8 +31,8 @@ pub trait Tab {
         key_event: KeyEvent,
         state: &mut AppState,
     ) -> Result<EventOutcome, io::Error>;
-    /// Complete command hints, ordered from left to right in the footer.
-    fn instructions(&self) -> Vec<Line<'static>>;
+    /// Commands available in this tab, grouped for the help modal.
+    fn help(&self) -> &'static [HelpSection];
     fn to_string(&self) -> String;
 }
 
