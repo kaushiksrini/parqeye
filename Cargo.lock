@@ -2163,6 +2163,8 @@ dependencies = [
  "parquet-format",
  "polars",
  "ratatui",
+ "regex",
+ "regex-syntax",
  "serde_json",
  "thiserror",
 ]
