@@ -19,6 +19,10 @@ pub enum EventOutcome {
     Consumed,
     Bubble,
     CopyCell,
+    FindCell {
+        backwards: bool,
+        include_current: bool,
+    },
 }
 
 pub trait Tab {

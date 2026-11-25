@@ -1,5 +1,6 @@
 use crate::file::sample_data::ParquetSampleData;
 use crate::tabs::visualize::SelectionMode;
+use crate::tabs::visualize::search::SearchPattern;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -133,6 +134,7 @@ fn max_scroll_from_widths(widths: &[u16], available_width: u16) -> usize {
 pub struct DataTable<'a> {
     pub data: &'a ParquetSampleData,
     projection: Option<&'a [usize]>,
+    search: Option<&'a SearchPattern>,
     width_cache: Option<&'a RefCell<ColumnWidthCache>>,
     local_width_cache: RefCell<ColumnWidthCache>,
     pub title: String,
@@ -157,6 +159,7 @@ impl<'a> DataTable<'a> {
         Self {
             data,
             projection: None,
+            search: None,
             width_cache: None,
             local_width_cache: RefCell::default(),
             title: format!("Data Preview ({} rows)", commas(data.total_rows as u64)),
@@ -179,6 +182,11 @@ impl<'a> DataTable<'a> {
 
     pub fn with_projection(mut self, projection: Option<&'a [usize]>) -> Self {
         self.projection = projection;
+        self
+    }
+
+    pub(crate) fn with_search(mut self, search: Option<&'a SearchPattern>) -> Self {
+        self.search = search;
         self
     }
 
@@ -451,7 +459,15 @@ impl<'a> DataTable<'a> {
                 SelectionMode::Column => column_selected,
                 SelectionMode::Cell => is_selected && column_selected,
             };
-            let style = if highlighted {
+            let matches_search = self.search.is_some_and(|search| search.is_match(cell_data));
+            let style = if highlighted && matches_search {
+                ratatui::style::Style::default()
+                    .bg(self.selected_color)
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else if matches_search {
+                ratatui::style::Style::default().fg(Color::Red)
+            } else if highlighted {
                 ratatui::style::Style::default()
                     .bg(self.selected_color)
                     .fg(Color::White)
@@ -613,6 +629,45 @@ impl Renderable for ParquetSampleData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_highlights_full_cells_and_distinguishes_the_selected_match_after_projection() {
+        let data = ParquetSampleData::from_rows(
+            &["a", "b", "c"],
+            vec![vec![
+                format!("{}needle", "x".repeat(100)),
+                "miss".into(),
+                "NEEDLE".into(),
+            ]],
+        );
+        let search = SearchPattern::new("needle").unwrap();
+        let area = Rect::new(0, 0, 90, 4);
+        let mut buf = Buffer::empty(area);
+        DataTable::new(&data)
+            .with_projection(Some(&[2, 0, 1]))
+            .with_search(Some(&search))
+            .with_selected_row(Some(0))
+            .with_selection(SelectionMode::Cell, 0)
+            .render(area, &mut buf);
+        assert_eq!(buf[(9, 2)].fg, Color::Red);
+        assert_eq!(buf[(9, 2)].bg, Color::Rgb(60, 60, 60));
+        assert!(buf[(9, 2)].modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(buf[(19, 2)].fg, Color::Red);
+        assert_eq!(buf[(19, 2)].bg, Color::Reset);
+        assert_eq!(buf[(46, 2)].bg, Color::Reset);
+        let visible: String = (0..90).map(|x| buf[(x, 2)].symbol()).collect();
+        assert!(visible.contains('…'));
+        // The long cell's matching suffix is clipped but its red text still marks it.
+        assert!(!visible.contains("needle"));
+        for width in 0..35 {
+            for height in 0..5 {
+                let area = Rect::new(0, 0, width, height);
+                DataTable::new(&data)
+                    .with_search(Some(&search))
+                    .render(area, &mut Buffer::empty(area));
+            }
+        }
+    }
 
     #[test]
     fn widths_ignore_offscreen_rows_and_cache_across_layout_and_rendering() {
