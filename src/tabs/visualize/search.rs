@@ -65,7 +65,7 @@ struct Job {
     generation: u64,
     request: SearchRequest,
     cancel: Arc<AtomicBool>,
-    scanned: Arc<AtomicUsize>,
+    current_row: Arc<AtomicUsize>,
 }
 
 struct Reply {
@@ -76,7 +76,7 @@ struct Reply {
 struct Pending {
     generation: u64,
     cancel: Arc<AtomicBool>,
-    scanned: Arc<AtomicUsize>,
+    current_row: Arc<AtomicUsize>,
 }
 
 #[derive(Default)]
@@ -101,7 +101,7 @@ impl SearchWorker {
                         if job.cancel.load(Ordering::Relaxed) {
                             continue;
                         }
-                        let result = find(&job.request, &job.cancel, &job.scanned, &mut cache);
+                        let result = find(&job.request, &job.cancel, &job.current_row, &mut cache);
                         if !job.cancel.load(Ordering::Relaxed)
                             && results_tx
                                 .send(Reply {
@@ -119,7 +119,10 @@ impl SearchWorker {
         }
         self.generation += 1;
         let cancel = Arc::new(AtomicBool::new(false));
-        let scanned = Arc::new(AtomicUsize::new(0));
+        // Progress is a one-based file row, not a fresh count for every n/N.
+        let current_row = Arc::new(AtomicUsize::new(
+            request.row.saturating_add(1).min(request.total_rows),
+        ));
         self.sender
             .as_ref()
             .unwrap()
@@ -127,13 +130,13 @@ impl SearchWorker {
                 generation: self.generation,
                 request,
                 cancel: Arc::clone(&cancel),
-                scanned: Arc::clone(&scanned),
+                current_row: Arc::clone(&current_row),
             })
             .map_err(|_| io::Error::other("search worker stopped"))?;
         self.pending = Some(Pending {
             generation: self.generation,
             cancel,
-            scanned,
+            current_row,
         });
         Ok(())
     }
@@ -142,10 +145,11 @@ impl SearchWorker {
         self.pending.is_some()
     }
 
-    pub fn scanned_rows(&self) -> usize {
+    /// One-based file row currently being searched; zero when idle or empty.
+    pub fn current_row(&self) -> usize {
         self.pending
             .as_ref()
-            .map_or(0, |job| job.scanned.load(Ordering::Relaxed))
+            .map_or(0, |job| job.current_row.load(Ordering::Relaxed))
     }
 
     pub fn cancel(&mut self) {
@@ -226,7 +230,7 @@ impl ChunkCache {
 fn find(
     request: &SearchRequest,
     cancel: &AtomicBool,
-    scanned: &AtomicUsize,
+    current_row: &AtomicUsize,
     cache: &mut ChunkCache,
 ) -> Result<Option<SearchHit>, String> {
     let columns = request.columns.len();
@@ -267,7 +271,7 @@ fn find(
         let row = position / columns;
         let column = position % columns;
         if last_row != Some(row) {
-            scanned.fetch_add(1, Ordering::Relaxed);
+            current_row.store(row + 1, Ordering::Relaxed);
             last_row = Some(row);
         }
         let values = cache.row(request, row)?;
@@ -354,6 +358,35 @@ mod tests {
         // A pattern with only one hit returns to that cell after a complete wrap.
         request.pattern = SearchPattern::new("^error one$").unwrap();
         assert_eq!(run(&request, &mut cache), next(0, 0, true));
+    }
+
+    #[test]
+    fn progress_follows_file_rows_from_the_cursor_in_both_directions_and_after_wrap() {
+        for (pattern, row, column, backwards, expected_row, wrapped) in [
+            ("^error two$", 1, 0, false, 2, false),
+            ("^NULL$", 1, 1, false, 3, false),
+            ("^érror$", 1, 1, true, 1, false),
+            ("^error one$", 2, 1, false, 1, true),
+            ("^NULL$", 0, 0, true, 3, true),
+        ] {
+            let mut request = request(pattern);
+            request.row = row;
+            request.column = column;
+            request.backwards = backwards;
+            request.include_current = false;
+            let progress = AtomicUsize::new(row + 1);
+            let hit = find(
+                &request,
+                &AtomicBool::new(false),
+                &progress,
+                &mut cache(&request),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(hit.row + 1, expected_row);
+            assert_eq!(hit.wrapped, wrapped);
+            assert_eq!(progress.load(Ordering::Relaxed), expected_row);
+        }
     }
 
     #[test]
@@ -461,7 +494,7 @@ mod tests {
             pending: Some(Pending {
                 generation: 2,
                 cancel: Arc::new(AtomicBool::new(false)),
-                scanned: Arc::new(AtomicUsize::new(0)),
+                current_row: Arc::new(AtomicUsize::new(0)),
             }),
         };
         sender
@@ -486,7 +519,7 @@ mod tests {
         worker.pending = Some(Pending {
             generation: 3,
             cancel: Arc::clone(&cancel),
-            scanned: Arc::new(AtomicUsize::new(0)),
+            current_row: Arc::new(AtomicUsize::new(0)),
         });
         worker.cancel();
         assert!(cancel.load(Ordering::Relaxed));

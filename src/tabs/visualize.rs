@@ -26,7 +26,6 @@ pub struct VisualizeState {
     pub(crate) search: Option<SearchPattern>,
     pub(crate) search_status: Option<String>,
     projection: Option<Vec<usize>>,
-    pub column_name_scroll: usize,
     pub(crate) column_widths: RefCell<ColumnWidthCache>,
 }
 
@@ -83,7 +82,6 @@ impl VisualizeState {
         self.mode = VisualizeMode::Normal;
         self.selection_mode = SelectionMode::Row;
         self.selected_column = 0;
-        self.column_name_scroll = 0;
     }
 
     pub fn cancel_prompt(&mut self) {
@@ -175,7 +173,6 @@ impl VisualizeTab {
                     // row browsing without moving the current viewport.
                     visualize.selection_mode = SelectionMode::Row;
                     visualize.selected_column = horizontal_offset;
-                    visualize.column_name_scroll = 0;
                 }
                 visualize.search = search;
                 visualize.search_status = None;
@@ -201,7 +198,6 @@ impl VisualizeTab {
                     .unwrap_or(0);
                 let visualize = state.visualize_mut();
                 visualize.selected_column = selected;
-                visualize.column_name_scroll = 0;
                 visualize.search_status = None;
                 if expression.is_empty() {
                     visualize.column_filter = None;
@@ -321,25 +317,6 @@ impl Tab for VisualizeTab {
                     .resolve_columns(&self.column_names);
                 EventOutcome::Consumed
             }
-            KeyCode::Left | KeyCode::Right
-                if key_event.modifiers == KeyModifiers::ALT
-                    && selection_mode != SelectionMode::Row =>
-            {
-                let visualize = state.visualize_mut();
-                let name_len = visualize
-                    .source_column(visualize.selected_column)
-                    .and_then(|index| self.column_names.get(index))
-                    .map_or(0, |name| name.chars().count());
-                visualize.column_name_scroll = if key_event.code == KeyCode::Left {
-                    visualize.column_name_scroll.saturating_sub(1)
-                } else {
-                    visualize
-                        .column_name_scroll
-                        .saturating_add(1)
-                        .min(name_len.saturating_sub(1))
-                };
-                EventOutcome::Consumed
-            }
             KeyCode::Char(':') => {
                 state.visualize_mut().begin_prompt(PromptKind::GoToRow);
                 EventOutcome::Consumed
@@ -441,8 +418,7 @@ impl Tab for VisualizeTab {
                 EventOutcome::Consumed
             }
             // Column navigation (Left/Right arrows)
-            KeyCode::Left => {
-                state.visualize_mut().column_name_scroll = 0;
+            KeyCode::Left if !key_event.modifiers.contains(KeyModifiers::ALT) => {
                 if selection_mode == SelectionMode::Row {
                     state.left();
                     state.visualize_mut().selected_column = state.horizontal_offset();
@@ -452,8 +428,7 @@ impl Tab for VisualizeTab {
                 }
                 EventOutcome::Consumed
             }
-            KeyCode::Right => {
-                state.visualize_mut().column_name_scroll = 0;
+            KeyCode::Right if !key_event.modifiers.contains(KeyModifiers::ALT) => {
                 if selection_mode == SelectionMode::Row {
                     state.right();
                     state.visualize_mut().selected_column = state.horizontal_offset();
@@ -474,10 +449,6 @@ impl Tab for VisualizeTab {
 
     fn instructions(&self) -> Vec<Line<'static>> {
         vec![
-            Line::from(vec!["/".green(), " : Find".into()]),
-            Line::from(vec!["n/N".green(), " : Next/previous match".into()]),
-            Line::from(vec!["*".green(), " : Columns".into()]),
-            Line::from(vec!["Alt-←/→".green(), " : Scroll name".into()]),
             Line::from(vec!["y".green(), " : Yank cell".into()]),
             Line::from(vec!["v".green(), " : Selection".into()]),
             Line::from(vec!["↑".green(), "/".white(), "↓".blue(), " : Row".into()]),
@@ -500,6 +471,9 @@ impl Tab for VisualizeTab {
                 " : Top/Bottom".into(),
             ]),
             Line::from(vec![":".green(), " : Go to row".into()]),
+            Line::from(vec!["*".green(), " Cols".into()]),
+            Line::from(vec!["/".green(), " Find".into()]),
+            Line::from(vec!["n/N".green()]),
         ]
     }
 

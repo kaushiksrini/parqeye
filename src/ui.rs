@@ -17,7 +17,7 @@ use crate::components::{
 use crate::file::Renderable;
 use crate::tabs::{
     TabManager,
-    visualize::{CommandPrompt, PromptKind, SelectionMode},
+    visualize::{CommandPrompt, PromptKind},
 };
 
 fn prompt_prefix(prompt: &CommandPrompt, width: u16) -> &'static str {
@@ -40,6 +40,55 @@ struct PromptLayout<'a> {
     status: Line<'a>,
     status_area: Rect,
     cursor: Position,
+}
+
+/// Keep the same information and shortcut regions in every Visualize mode.
+/// Prompts and temporary feedback only replace the information region.
+fn visualize_footer_areas(area: Rect) -> [Rect; 2] {
+    let context_width = (u32::from(area.width) * 2 / 5) as u16;
+    [
+        Rect::new(area.x, area.y, context_width, area.height),
+        Rect::new(
+            area.x + context_width,
+            area.y,
+            area.width - context_width,
+            area.height,
+        ),
+    ]
+}
+
+struct FooterItem<'a> {
+    label: String,
+    value: &'a str,
+    color: Color,
+}
+
+/// Share the available width among active functions rather than allowing an
+/// early long expression to hide every function that follows it.
+fn footer_items(items: &[FooterItem<'_>], width: u16) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut remaining = width;
+    for (index, item) in items.iter().enumerate() {
+        let count = (items.len() - index) as u16;
+        let budget = remaining.saturating_sub(count.saturating_sub(1) * 3) / count;
+        if index > 0 {
+            spans.push(" › ".dim());
+        }
+        let label = truncate_cell(&item.label, budget);
+        let label_width = Span::raw(label.as_ref()).width() as u16;
+        let value = truncate_cell(item.value, budget.saturating_sub(label_width));
+        let used = label_width + Span::raw(value.as_ref()).width() as u16;
+        spans.push(Span::styled(
+            label.into_owned(),
+            Style::default().fg(item.color),
+        ));
+        spans.push(Span::styled(
+            value.into_owned(),
+            Style::default().fg(item.color),
+        ));
+        remaining = remaining.saturating_sub(used + 3);
+    }
+    Line::from(spans)
 }
 
 /// Rendering and cursor placement must use the same input width after reserving
@@ -107,7 +156,8 @@ where
         && area.height > 0
         && let Some(prompt) = app.state().visualize().prompt()
     {
-        let footer = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+        let [footer, _] =
+            visualize_footer_areas(Rect::new(area.x, area.bottom() - 1, area.width, 1));
         frame.set_cursor_position(
             prompt_layout(prompt, app.parquet_ctx.sample_data.total_columns, footer).cursor,
         );
@@ -229,6 +279,21 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_footer_view(&self, area: Rect, buf: &mut Buffer) {
+        if self.0.tabs().active_tab().to_string() != "Visualize" {
+            let title = self.0.title;
+            let [title_area, shortcuts] = Layout::horizontal([
+                Constraint::Length(Line::from(title).width() as u16),
+                Constraint::Fill(1),
+            ])
+            .areas(area);
+            title.bold().green().render(title_area, buf);
+            self.0.tabs().render_instructions(shortcuts, buf);
+            return;
+        }
+
+        let [area, shortcuts] = visualize_footer_areas(area);
+        self.0.tabs().render_instructions(shortcuts, buf);
+
         if let Some(prompt) = self.0.state().visualize().prompt() {
             let layout = prompt_layout(prompt, self.0.parquet_ctx.sample_data.total_columns, area);
             layout.prefix.green().render(layout.edit_area, buf);
@@ -259,107 +324,44 @@ impl<'a> AppWidget<'a> {
             return;
         }
 
-        if self.0.tabs().active_tab().to_string() == "Visualize"
-            && let Some(context) = self.visualize_footer(area.width)
-        {
-            context.render(area, buf);
-            return;
-        }
-
-        let title = self.0.title;
-        let title_width = Line::from(title).width() as u16;
-        let [title_area, footer_area] =
-            Layout::horizontal([Constraint::Length(title_width), Constraint::Fill(1)]).areas(area);
-        title.bold().fg(Color::Green).render(title_area, buf);
-        self.0.tabs().render_instructions(footer_area, buf);
+        self.visualize_footer(area.width).render(area, buf);
     }
 
-    fn visualize_footer(&self, width: u16) -> Option<Line<'_>> {
-        let visualize = self.0.state().visualize();
-        if let Some(search) = &visualize.search {
-            let context = (width >= 72)
-                .then(|| self.visualize_column_footer(width / 3))
-                .flatten();
-            let search_width =
-                width.saturating_sub(context.as_ref().map_or(0, |line| line.width() as u16 + 3));
-            let status = visualize
-                .search_status
-                .as_deref()
-                .unwrap_or("n/N: next/previous · / then empty Enter: clear");
-            let expression = truncate_cell(search.expression(), (search_width / 3).max(1));
-            let label = format!("/{expression} | {status}");
-            let mut spans = vec![Span::styled(
-                truncate_cell(&label, search_width).into_owned(),
-                Style::default().fg(Color::Yellow),
-            )];
-            if let Some(context) = context {
-                spans.push(" | ".dim());
-                spans.extend(context.spans);
-            }
-            return Some(Line::from(spans));
-        }
-        self.visualize_column_footer(width)
-    }
-
-    fn visualize_column_footer(&self, width: u16) -> Option<Line<'_>> {
+    fn visualize_footer(&self, width: u16) -> Line<'static> {
         let visualize = self.0.state().visualize();
         let data = &self.0.parquet_ctx.sample_data;
-        let name = (visualize.selection_mode != SelectionMode::Row)
-            .then(|| visualize.source_column(visualize.selected_column))
-            .flatten()
-            .and_then(|index| data.flattened_columns.get(index));
-        if visualize.column_filter.is_none() && name.is_none() {
-            return None;
-        }
-        let mut remaining = width;
-        let mut spans = Vec::new();
-        if visualize.column_filter.is_some() {
-            let count = format!(
-                "Columns: {}/{}",
-                visualize.column_count(data.total_columns),
-                data.total_columns
-            );
-            remaining = remaining.saturating_sub(Span::raw(&count).width() as u16);
-            spans.push(count.cyan());
-        }
-        if let Some(name) = name {
-            if !spans.is_empty() {
-                spans.push(" | ".into());
-                remaining = remaining.saturating_sub(3);
-            }
-            let start = name
-                .char_indices()
-                .nth(visualize.column_name_scroll)
-                .map_or(name.len(), |(index, _)| index);
-            // Leave room for the expression when both it and the name fit.
-            let expression_width = if visualize.column_filter.is_some() && remaining >= 24 {
-                remaining / 3
-            } else {
-                0
-            };
-            let text = truncate_cell(
-                &name[start..],
-                remaining.saturating_sub(expression_width + 5),
-            );
-            remaining = remaining.saturating_sub(5 + Span::raw(text.as_ref()).width() as u16);
-            spans.extend([
-                "Col: ".yellow(),
-                Span::styled(text, Style::default().fg(Color::Yellow)),
-            ]);
-            if expression_width == 0 {
-                return Some(Line::from(spans));
-            }
-        }
+        let mut items = Vec::new();
         if let Some(expression) = &visualize.column_filter {
-            spans.extend([
-                " | * ".cyan(),
-                Span::styled(
-                    truncate_cell(expression, remaining.saturating_sub(5)),
-                    Style::default().fg(Color::Cyan),
+            items.push(FooterItem {
+                label: format!(
+                    "* {}/{} ",
+                    visualize.column_count(data.total_columns),
+                    data.total_columns
                 ),
-            ]);
+                value: expression,
+                color: Color::Cyan,
+            });
         }
-        Some(Line::from(spans))
+        if let Some(search) = &visualize.search {
+            items.push(FooterItem {
+                label: "/ ".into(),
+                value: search.expression(),
+                color: Color::Red,
+            });
+        }
+        if visualize.search.is_some()
+            && let Some(status) = &visualize.search_status
+        {
+            items.push(FooterItem {
+                label: String::new(),
+                value: status,
+                color: Color::Yellow,
+            });
+        }
+        if items.is_empty() {
+            return Line::from(self.0.title.to_string()).bold().green();
+        }
+        footer_items(&items, width)
     }
 
     fn render_metadata_view(&self, area: Rect, buf: &mut Buffer) {
@@ -553,6 +555,35 @@ impl<'a> Widget for AppWidget<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_function_items_share_space_without_hiding_later_functions() {
+        let columns = "資料_user_columns".repeat(20);
+        let search = "error|timeout".repeat(20);
+        let items = [
+            FooterItem {
+                label: "* 3/13 ".into(),
+                value: &columns,
+                color: Color::Cyan,
+            },
+            FooterItem {
+                label: "/ ".into(),
+                value: &search,
+                color: Color::Red,
+            },
+        ];
+        for width in 0..200 {
+            let line = footer_items(&items, width);
+            let area = Rect::new(0, 0, width, 1);
+            let mut buf = Buffer::empty(area);
+            line.render(area, &mut buf);
+            if width >= 24 {
+                let text: String = buf.content().iter().map(|cell| cell.symbol()).collect();
+                assert!(text.contains("* 3/13") && text.contains(" › / "), "{text}");
+                assert!(text.contains('…'));
+            }
+        }
+    }
 
     #[test]
     fn prompt_feedback_leaves_space_for_input_and_its_cursor() {
