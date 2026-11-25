@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::Stylize;
-use ratatui::text::Span;
+use ratatui::text::Line;
 use std::io;
 
 use crate::{
@@ -82,19 +82,20 @@ impl Tab for SchemaTab {
         Ok(outcome)
     }
 
-    fn instructions(&self) -> Vec<Span<'static>> {
+    fn instructions(&self) -> Vec<Line<'static>> {
         vec![
-            "←".green(),
-            "/".white(),
-            "→".blue(),
-            " : ".into(),
-            "Scroll".into(),
-            ", ".into(),
-            "↑".green(),
-            "/".white(),
-            "↓".blue(),
-            " : ".into(),
-            "Schema".into(),
+            Line::from(vec![
+                "←".green(),
+                "/".white(),
+                "→".blue(),
+                " : Scroll".into(),
+            ]),
+            Line::from(vec![
+                "↑".green(),
+                "/".white(),
+                "↓".blue(),
+                " : Schema".into(),
+            ]),
         ]
     }
 

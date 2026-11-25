@@ -1,7 +1,7 @@
 use crate::components::data_table::ColumnWidthCache;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Stylize;
-use ratatui::text::Span;
+use ratatui::text::Line;
 use std::cell::RefCell;
 use std::io;
 
@@ -414,43 +414,32 @@ impl Tab for VisualizeTab {
         Ok(outcome)
     }
 
-    fn instructions(&self) -> Vec<Span<'static>> {
+    fn instructions(&self) -> Vec<Line<'static>> {
         vec![
-            "*".green(),
-            " : Columns | ".into(),
-            "Alt-←/→".green(),
-            " : Scroll name | ".into(),
-            "y".green(),
-            " : Yank cell | ".into(),
-            "v".green(),
-            " : Selection | ".into(),
-            "↑".green(),
-            "/".white(),
-            "↓".blue(),
-            " : ".into(),
-            "Row".into(),
-            " | ".white(),
-            "→".green(),
-            "/".white(),
-            "←".blue(),
-            " : ".into(),
-            "Column".into(),
-            " | ".white(),
-            "Ctrl-u".green(),
-            "/".white(),
-            "Ctrl-d".blue(),
-            " : ".into(),
-            "Page".into(),
-            " | ".white(),
-            "g".green(),
-            "/".white(),
-            "G".blue(),
-            " : ".into(),
-            "Top/Bottom".into(),
-            " | ".white(),
-            ":".green(),
-            " : ".into(),
-            "Go to row".into(),
+            Line::from(vec!["*".green(), " : Columns".into()]),
+            Line::from(vec!["Alt-←/→".green(), " : Scroll name".into()]),
+            Line::from(vec!["y".green(), " : Yank cell".into()]),
+            Line::from(vec!["v".green(), " : Selection".into()]),
+            Line::from(vec!["↑".green(), "/".white(), "↓".blue(), " : Row".into()]),
+            Line::from(vec![
+                "→".green(),
+                "/".white(),
+                "←".blue(),
+                " : Column".into(),
+            ]),
+            Line::from(vec![
+                "Ctrl-u".green(),
+                "/".white(),
+                "Ctrl-d".blue(),
+                " : Page".into(),
+            ]),
+            Line::from(vec![
+                "g".green(),
+                "/".white(),
+                "G".blue(),
+                " : Top/Bottom".into(),
+            ]),
+            Line::from(vec![":".green(), " : Go to row".into()]),
         ]
     }
 

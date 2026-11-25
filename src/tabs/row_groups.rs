@@ -4,7 +4,7 @@ use crate::{
 };
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::Stylize;
-use ratatui::text::Span;
+use ratatui::text::Line;
 use std::io;
 
 pub struct RowGroupsTab {
@@ -81,19 +81,20 @@ impl Tab for RowGroupsTab {
         Ok(outcome)
     }
 
-    fn instructions(&self) -> Vec<Span<'static>> {
+    fn instructions(&self) -> Vec<Line<'static>> {
         vec![
-            "→".green(),
-            "/".white(),
-            "←".blue(),
-            " : ".into(),
-            "Iterate Row Groups".into(),
-            ", ".into(),
-            "↑".green(),
-            "/".white(),
-            "↓".blue(),
-            " : ".into(),
-            "Schema".into(),
+            Line::from(vec![
+                "→".green(),
+                "/".white(),
+                "←".blue(),
+                " : Iterate Row Groups".into(),
+            ]),
+            Line::from(vec![
+                "↑".green(),
+                "/".white(),
+                "↓".blue(),
+                " : Schema".into(),
+            ]),
         ]
     }
 

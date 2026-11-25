@@ -11,7 +11,7 @@ pub use visualize::VisualizeTab;
 
 use crate::app::AppState;
 use crossterm::event::KeyEvent;
-use ratatui::text::Span;
+use ratatui::text::Line;
 use std::io;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,7 +27,8 @@ pub trait Tab {
         key_event: KeyEvent,
         state: &mut AppState,
     ) -> Result<EventOutcome, io::Error>;
-    fn instructions(&self) -> Vec<Span<'static>>;
+    /// Complete command hints, ordered from left to right in the footer.
+    fn instructions(&self) -> Vec<Line<'static>>;
     fn to_string(&self) -> String;
 }
 

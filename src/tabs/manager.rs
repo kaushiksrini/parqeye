@@ -75,29 +75,28 @@ impl TabManager {
     }
 
     pub fn render_instructions(&self, area: Rect, buf: &mut Buffer) {
-        let mut span = self.active_tab().instructions();
-        if !span.is_empty() {
-            span.push(" - ".into());
-        }
-        span.extend(vec![
-            "[Tab]".green(),
-            " Next Tab".into(),
-            ", ".into(),
-            "[Q]".blue(),
-            "uit".into(),
+        let mut instructions = self.active_tab().instructions();
+        instructions.extend([
+            Line::from(vec!["[Tab]".green(), " Next Tab".into()]),
+            Line::from(vec!["[Q]".blue(), "uit".into()]),
         ]);
-        let line = Line::from(span);
 
-        // Calculate the width of the instruction text
-        let instruction_width = line.width() as u16;
+        // Keep the longest suffix of complete commands that fits the footer.
+        let mut line = Line::default();
+        for instruction in instructions.into_iter().rev() {
+            let separator = if line.spans.is_empty() { "" } else { " | " };
+            if instruction.width() + separator.len() + line.width() > usize::from(area.width) {
+                break;
+            }
+            let mut spans = instruction.spans;
+            if !separator.is_empty() {
+                spans.push(separator.into());
+            }
+            spans.extend(line.spans);
+            line = Line::from(spans);
+        }
 
-        // Create a layout that positions the instructions on the right
-        use ratatui::layout::{Constraint, Layout};
-        let [_, instruction_area] =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(instruction_width)])
-                .areas(area);
-
-        line.render(instruction_area, buf);
+        line.right_aligned().render(area, buf);
     }
 }
 

@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::Stylize;
-use ratatui::text::Span;
+use ratatui::text::Line;
 use std::io;
 
 use crate::{
@@ -76,15 +76,15 @@ impl Tab for MetadataTab {
         Ok(outcome)
     }
 
-    fn instructions(&self) -> Vec<Span<'static>> {
+    fn instructions(&self) -> Vec<Line<'static>> {
         if self.max_vertical_scroll.map(|n| n > 0).unwrap_or(false) {
-            vec![
+            vec![Line::from(vec![
                 "↑".green(),
                 "/".white(),
                 "↓".blue(),
                 " : ".into(),
                 "Scroll properties".into(),
-            ]
+            ])]
         } else {
             vec![]
         }
