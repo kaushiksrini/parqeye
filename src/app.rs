@@ -1138,9 +1138,9 @@ mod tests {
                     .map(|cell| cell.symbol())
                     .collect();
                 assert!(
-                    text.contains("[Tab] Tabs")
+                    text.contains("[Tab] Toggle Mode")
                         && text.contains("[?] Help")
-                        && text.contains("[q]uit"),
+                        && text.contains("[Q]uit"),
                     "{text}"
                 );
             }
@@ -1305,7 +1305,7 @@ mod tests {
             assert_eq!(app.state.visualize().prompt().unwrap().buffer, "q?");
             assert!(app.state.help().is_none());
             assert!(!app.exit);
-            assert!(footer(&app).0.contains("[q]uit"));
+            assert!(footer(&app).0.contains("[Q]uit"));
             app.handle_key_event(KeyCode::Esc.into());
         }
     }
@@ -1361,7 +1361,7 @@ mod tests {
                     let buf = small_terminal.backend().buffer();
                     let footer: String =
                         (0..width).map(|x| buf[(x, height - 1)].symbol()).collect();
-                    assert!(footer.contains("[q]uit"), "{width}x{height}: {footer}");
+                    assert!(footer.contains("[Q]uit"), "{width}x{height}: {footer}");
                     if width >= 17 {
                         assert!(footer.contains("[?] Help"), "{footer}");
                     }
