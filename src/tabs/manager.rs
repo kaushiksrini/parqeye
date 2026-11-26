@@ -75,11 +75,11 @@ impl TabManager {
     }
 
     pub fn render_instructions(&self, area: Rect, buf: &mut Buffer) {
-        let mut instructions = self.active_tab().instructions();
-        instructions.extend([
-            Line::from(vec!["[Tab]".green(), " Next Tab".into()]),
+        let instructions = [
+            Line::from(vec!["[Tab]".green(), " Toggle Mode".into()]),
+            Line::from(vec!["[?]".yellow(), " Help".into()]),
             Line::from(vec!["[Q]".blue(), "uit".into()]),
-        ]);
+        ];
 
         // Keep the longest suffix of complete commands that fits the footer.
         let mut line = Line::default();
@@ -94,6 +94,10 @@ impl TabManager {
             }
             spans.extend(line.spans);
             line = Line::from(spans);
+        }
+
+        if area.width < 6 {
+            line = Line::from(if area.width >= 3 { "[q]" } else { "q" }.blue());
         }
 
         line.right_aligned().render(area, buf);

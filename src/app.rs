@@ -3,6 +3,7 @@ use ratatui::{DefaultTerminal, layout::Size};
 use std::io;
 use std::time::{Duration, Instant};
 
+use crate::components::help::{HelpModal, HelpState};
 use crate::file::parquet_ctx::ParquetCtx;
 use crate::tabs::visualize::search::{SearchRequest, SearchWorker};
 use crate::tabs::visualize::{SelectionMode, VisualizeState};
@@ -70,6 +71,7 @@ pub struct AppState {
     max_horizontal_offset: usize,
     visualize: VisualizeState,
     toast: Option<Toast>,
+    help: Option<HelpState>,
 }
 
 pub struct Toast {
@@ -95,6 +97,7 @@ impl AppState {
             max_horizontal_offset: usize::MAX,
             visualize: VisualizeState::default(),
             toast: None,
+            help: None,
         }
     }
 
@@ -105,6 +108,11 @@ impl AppState {
         self.data_vertical_scroll = 0;
         self.visualize.reset_navigation();
         self.toast = None;
+        self.help = None;
+    }
+
+    pub fn help(&self) -> Option<&HelpState> {
+        self.help.as_ref()
     }
 
     pub fn show_toast(&mut self, message: impl Into<String>, is_error: bool) {
@@ -277,6 +285,12 @@ impl<'a> App<'a> {
     }
 
     fn prepare_viewport(&mut self, terminal_size: Size) {
+        if let Some(help) = &mut self.state.help {
+            let area = ratatui::layout::Rect::new(0, 0, terminal_size.width, terminal_size.height);
+            (help.visible_rows, help.max_scroll) =
+                HelpModal::new(self.tabs.active_tab().as_ref(), help.scroll).scroll_bounds(area);
+            help.scroll = help.scroll.min(help.max_scroll);
+        }
         let is_visualize = self.tabs.active_tab().to_string() == "Visualize";
         let visible_rows = visible_data_rows(terminal_size.height);
         self.state.set_visible_data_rows(visible_rows);
@@ -365,6 +379,16 @@ impl<'a> App<'a> {
         key_event: KeyEvent,
         clipboard: &mut impl io::Write,
     ) {
+        if self.state.help.is_some() {
+            self.handle_help_key(key_event);
+            return;
+        }
+        // Prompts own printable characters, including regex '?' and literal 'q'.
+        // Opening help otherwise leaves the tab's selection and search intact.
+        if key_event.code == KeyCode::Char('?') && self.state.visualize().prompt().is_none() {
+            self.state.help = Some(HelpState::default());
+            return;
+        }
         self.state.toast = None;
         let repeating_find = self.state.visualize().prompt().is_none()
             && matches!(key_event.code, KeyCode::Char('n' | 'N'))
@@ -434,6 +458,35 @@ impl<'a> App<'a> {
             KeyCode::BackTab => {
                 self.tabs.prev();
                 self.state.reset();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_help_key(&mut self, key_event: KeyEvent) {
+        let help = self.state.help.as_mut().expect("help must be open");
+        match key_event.code {
+            KeyCode::Char('?') => self.state.help = None,
+            KeyCode::Char('q' | 'Q') => self.exit(),
+            KeyCode::Up => help.scroll = help.scroll.saturating_sub(1),
+            KeyCode::Down => help.scroll = help.scroll.saturating_add(1).min(help.max_scroll),
+            KeyCode::PageUp => help.scroll = help.scroll.saturating_sub(help.visible_rows.max(1)),
+            KeyCode::PageDown => {
+                help.scroll = help
+                    .scroll
+                    .saturating_add(help.visible_rows.max(1))
+                    .min(help.max_scroll);
+            }
+            KeyCode::Home => help.scroll = 0,
+            KeyCode::End => help.scroll = help.max_scroll,
+            KeyCode::Tab | KeyCode::BackTab => {
+                if key_event.code == KeyCode::Tab {
+                    self.tabs.next();
+                } else {
+                    self.tabs.prev();
+                }
+                self.state.reset();
+                self.state.help = Some(HelpState::default());
             }
             _ => {}
         }
@@ -1057,7 +1110,8 @@ mod tests {
         for width in [0, 1, 12, 24, 40, 80, 120, 200] {
             let mut app = App::new(&ctx);
             let mut terminal = Terminal::new(TestBackend::new(width, 10)).unwrap();
-            let context_width = (u32::from(width) * 2 / 5) as u16;
+            let context_width =
+                crate::ui::footer_areas(ratatui::layout::Rect::new(0, 9, width, 1))[0].width;
             let mut render = |app: &mut App<'_>| {
                 app.prepare_viewport(Size::new(width, 10));
                 assert_eq!(app.state.visible_data_rows(), 4);
@@ -1070,7 +1124,7 @@ mod tests {
                 let shortcuts: Vec<_> = (context_width..width)
                     .map(|x| buf[(x, 9)].clone())
                     .collect();
-                if width > 0 && app.state.visualize().prompt().is_some() {
+                if context_width > 0 && app.state.visualize().prompt().is_some() {
                     let cursor = terminal.get_cursor_position().unwrap();
                     assert_eq!(cursor.y, 9);
                     assert!(cursor.x < context_width.max(1));
@@ -1084,7 +1138,9 @@ mod tests {
                     .map(|cell| cell.symbol())
                     .collect();
                 assert!(
-                    text.contains("* Cols") && text.contains("/ Find") && text.contains("n/N"),
+                    text.contains("[Tab] Toggle Mode")
+                        && text.contains("[?] Help")
+                        && text.contains("[Q]uit"),
                     "{text}"
                 );
             }
@@ -1137,6 +1193,180 @@ mod tests {
             }
             set_search(&mut app, "");
             assert_eq!(render(&mut app).1, expected_shortcuts);
+        }
+    }
+
+    #[test]
+    fn help_owns_keys_preserves_navigation_and_switches_context_with_tabs() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        for tab in 0..app.tabs.tabs.len() {
+            app.tabs.active_tab = tab;
+            app.state.reset();
+            app.handle_key_event(KeyCode::Down.into());
+            app.handle_key_event(KeyCode::Right.into());
+            app.prepare_viewport(Size::new(80, 12));
+            let row = app.state.vertical_offset();
+            let column = app.state.horizontal_offset();
+            let selection = app.state.visualize().clone();
+            app.handle_key_event(KeyCode::Char('?').into());
+            app.prepare_viewport(Size::new(80, 12));
+            assert!(app.state.help().is_some());
+            let mut clipboard = Vec::new();
+            for key in [
+                KeyCode::Down,
+                KeyCode::Right,
+                KeyCode::Char('v'),
+                KeyCode::Char('y'),
+                KeyCode::Char('/'),
+                KeyCode::Char('*'),
+                KeyCode::Char(':'),
+            ] {
+                app.handle_key_event_with_clipboard(key.into(), &mut clipboard);
+            }
+            assert!(clipboard.is_empty());
+            assert_eq!(app.state.vertical_offset(), row);
+            assert_eq!(app.state.horizontal_offset(), column);
+            assert_eq!(app.state.visualize(), &selection);
+            let help_scroll = app.state.help().unwrap().scroll;
+            app.handle_key_event(KeyCode::Esc.into());
+            assert_eq!(app.state.help().unwrap().scroll, help_scroll);
+            assert_eq!(app.state.vertical_offset(), row);
+            assert_eq!(app.state.horizontal_offset(), column);
+            assert_eq!(app.state.visualize(), &selection);
+            app.handle_key_event(KeyCode::Char('?').into());
+            assert!(app.state.help().is_none());
+        }
+
+        app.handle_key_event(KeyCode::Char('?').into());
+        let tab = app.tabs.active_tab;
+        app.handle_key_event(KeyCode::Tab.into());
+        assert_eq!(app.tabs.active_tab, (tab + 1) % app.tabs.tabs.len());
+        assert_eq!(app.state.help().unwrap().scroll, 0);
+        app.handle_key_event(KeyCode::BackTab.into());
+        assert_eq!(app.tabs.active_tab, tab);
+        assert!(app.state.help().is_some());
+        app.handle_key_event(KeyCode::Char('q').into());
+        assert!(app.exit);
+    }
+
+    #[test]
+    fn help_scrolls_without_moving_the_table_and_clamps_after_resize() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        app.handle_key_event(KeyCode::Char('?').into());
+        app.prepare_viewport(Size::new(60, 12));
+        let help = app.state.help().unwrap();
+        let page = help.visible_rows;
+        assert!(help.max_scroll > page && page > 0);
+        app.handle_key_event(KeyCode::PageDown.into());
+        assert_eq!(app.state.help().unwrap().scroll, page);
+        app.handle_key_event(KeyCode::Down.into());
+        assert_eq!(app.state.help().unwrap().scroll, page + 1);
+        app.handle_key_event(KeyCode::Up.into());
+        app.handle_key_event(KeyCode::PageUp.into());
+        assert_eq!(app.state.help().unwrap().scroll, 0);
+        app.handle_key_event(KeyCode::End.into());
+        assert_eq!(
+            app.state.help().unwrap().scroll,
+            app.state.help().unwrap().max_scroll
+        );
+        app.handle_key_event(KeyCode::Down.into());
+        app.prepare_viewport(Size::new(120, 100));
+        assert_eq!(app.state.help().unwrap().scroll, 0);
+        assert_eq!(app.state.vertical_offset(), 0);
+        app.prepare_viewport(Size::new(40, 10));
+        app.handle_key_event(KeyCode::End.into());
+        app.handle_key_event(KeyCode::Home.into());
+        assert_eq!(app.state.help().unwrap().scroll, 0);
+    }
+
+    #[test]
+    fn help_and_quit_characters_remain_text_in_command_prompts() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        for command in ['/', '*', ':'] {
+            app.handle_key_event(KeyCode::Char(command).into());
+            for character in "q?".chars() {
+                app.handle_key_event(KeyCode::Char(character).into());
+            }
+            assert_eq!(app.state.visualize().prompt().unwrap().buffer, "q?");
+            assert!(app.state.help().is_none());
+            assert!(!app.exit);
+            assert!(footer(&app).0.contains("[Q]uit"));
+            app.handle_key_event(KeyCode::Esc.into());
+        }
+    }
+
+    #[test]
+    fn help_shows_tab_commands_and_keeps_quit_visible_at_small_sizes() {
+        let path = format!(
+            "{}/alltypes_plain.parquet",
+            crate::file::parquet_test_data()
+        );
+        let ctx = ParquetCtx::from_file(&path).unwrap();
+        let mut app = App::new(&ctx);
+        let mut terminal = Terminal::new(TestBackend::new(100, 100)).unwrap();
+        let expected_sections = [
+            "Navigation and selection",
+            "Browse metadata",
+            "Explore the schema",
+            "Inspect row groups",
+        ];
+        for (tab, section) in expected_sections.into_iter().enumerate() {
+            app.tabs.active_tab = tab;
+            app.state.reset();
+            app.handle_key_event(KeyCode::Char('?').into());
+            app.prepare_viewport(Size::new(100, 100));
+            terminal
+                .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            let text: String = buf.content().iter().map(|cell| cell.symbol()).collect();
+            assert!(text.contains(&format!("{} - Help", app.tabs.active_tab().to_string())));
+            assert!(text.contains(section), "{text}");
+            assert!(text.contains("Across all tabs"));
+            assert_eq!(text.contains("Find, columns and row commands"), tab == 0);
+            assert!(text.contains("[?] Close"));
+
+            for (width, height) in [
+                (0, 0),
+                (1, 1),
+                (6, 1),
+                (6, 4),
+                (12, 6),
+                (24, 8),
+                (40, 12),
+                (80, 24),
+            ] {
+                let mut small_terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                app.prepare_viewport(Size::new(width, height));
+                app.handle_key_event(KeyCode::End.into());
+                small_terminal
+                    .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+                    .unwrap();
+                if width >= 6 && height > 0 {
+                    let buf = small_terminal.backend().buffer();
+                    let footer: String =
+                        (0..width).map(|x| buf[(x, height - 1)].symbol()).collect();
+                    assert!(footer.contains("[Q]uit"), "{width}x{height}: {footer}");
+                    if width >= 17 {
+                        assert!(footer.contains("[?] Help"), "{footer}");
+                    }
+                }
+            }
         }
     }
 

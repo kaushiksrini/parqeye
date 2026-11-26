@@ -1,6 +1,5 @@
+use crate::components::help::HelpSection;
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use std::io;
 
 use crate::{
@@ -82,21 +81,15 @@ impl Tab for SchemaTab {
         Ok(outcome)
     }
 
-    fn instructions(&self) -> Vec<Line<'static>> {
-        vec![
-            Line::from(vec![
-                "←".green(),
-                "/".white(),
-                "→".blue(),
-                " : Scroll".into(),
-            ]),
-            Line::from(vec![
-                "↑".green(),
-                "/".white(),
-                "↓".blue(),
-                " : Schema".into(),
-            ]),
-        ]
+    fn help(&self) -> &'static [HelpSection] {
+        &[HelpSection {
+            title: "Explore the schema",
+            commands: &[
+                ("↑ / ↓", "Select a column to view its details."),
+                ("← / →", "Scroll column details horizontally."),
+                ("PgUp / PgDn", "Move up or down one page of columns."),
+            ],
+        }]
     }
 
     fn to_string(&self) -> String {

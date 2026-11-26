@@ -10,3 +10,4 @@ pub use row_group::RowGroupProgressBar;
 pub use schema::FileSchemaTable;
 pub use schema::SchemaTreeComponent;
 pub use scrollbar::ScrollbarComponent;
+pub mod help;

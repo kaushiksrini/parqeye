@@ -1,6 +1,5 @@
+use crate::components::help::HelpSection;
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use std::io;
 
 use crate::{
@@ -76,18 +75,14 @@ impl Tab for MetadataTab {
         Ok(outcome)
     }
 
-    fn instructions(&self) -> Vec<Line<'static>> {
-        if self.max_vertical_scroll.map(|n| n > 0).unwrap_or(false) {
-            vec![Line::from(vec![
-                "↑".green(),
-                "/".white(),
-                "↓".blue(),
-                " : ".into(),
-                "Scroll properties".into(),
-            ])]
-        } else {
-            vec![]
-        }
+    fn help(&self) -> &'static [HelpSection] {
+        &[HelpSection {
+            title: "Browse metadata",
+            commands: &[
+                ("↑ / ↓", "Scroll file properties and key-value metadata."),
+                ("PgUp / PgDn", "Move up or down one page."),
+            ],
+        }]
     }
 
     fn to_string(&self) -> String {

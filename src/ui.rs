@@ -10,6 +10,7 @@ use ratatui::{
 
 use crate::app::AppRenderView;
 use crate::components::data_table::truncate_cell;
+use crate::components::help::HelpModal;
 use crate::components::{
     DataTable, FileSchemaTable, RowGroupColumnMetadataComponent, RowGroupMetadata,
     RowGroupProgressBar, SchemaTreeComponent, ScrollbarComponent,
@@ -42,10 +43,11 @@ struct PromptLayout<'a> {
     cursor: Position,
 }
 
-/// Keep the same information and shortcut regions in every Visualize mode.
+/// Keep the same information and shortcut regions in every tab and mode.
 /// Prompts and temporary feedback only replace the information region.
-fn visualize_footer_areas(area: Rect) -> [Rect; 2] {
-    let context_width = (u32::from(area.width) * 2 / 5) as u16;
+pub(crate) fn footer_areas(area: Rect) -> [Rect; 2] {
+    // Reserve help and quit before allocating room for status or prompt text.
+    let context_width = ((u32::from(area.width) * 2 / 5) as u16).min(area.width.saturating_sub(17));
     [
         Rect::new(area.x, area.y, context_width, area.height),
         Rect::new(
@@ -152,15 +154,24 @@ where
     let area = frame.area();
     frame.render_widget(AppWidget(app), area);
 
+    if let Some(help) = app.state().help() {
+        frame.render_widget(
+            HelpModal::new(app.tabs().active_tab().as_ref(), help.scroll),
+            area,
+        );
+        return;
+    }
+
     if area.width > 0
         && area.height > 0
         && let Some(prompt) = app.state().visualize().prompt()
     {
-        let [footer, _] =
-            visualize_footer_areas(Rect::new(area.x, area.bottom() - 1, area.width, 1));
-        frame.set_cursor_position(
-            prompt_layout(prompt, app.parquet_ctx.sample_data.total_columns, footer).cursor,
-        );
+        let [footer, _] = footer_areas(Rect::new(area.x, area.bottom() - 1, area.width, 1));
+        if footer.width > 0 {
+            frame.set_cursor_position(
+                prompt_layout(prompt, app.parquet_ctx.sample_data.total_columns, footer).cursor,
+            );
+        }
     }
 }
 
@@ -279,20 +290,13 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_footer_view(&self, area: Rect, buf: &mut Buffer) {
+        let [area, shortcuts] = footer_areas(area);
+        self.0.tabs().render_instructions(shortcuts, buf);
+
         if self.0.tabs().active_tab().to_string() != "Visualize" {
-            let title = self.0.title;
-            let [title_area, shortcuts] = Layout::horizontal([
-                Constraint::Length(Line::from(title).width() as u16),
-                Constraint::Fill(1),
-            ])
-            .areas(area);
-            title.bold().green().render(title_area, buf);
-            self.0.tabs().render_instructions(shortcuts, buf);
+            self.0.title.bold().green().render(area, buf);
             return;
         }
-
-        let [area, shortcuts] = visualize_footer_areas(area);
-        self.0.tabs().render_instructions(shortcuts, buf);
 
         if let Some(prompt) = self.0.state().visualize().prompt() {
             let layout = prompt_layout(prompt, self.0.parquet_ctx.sample_data.total_columns, area);
@@ -532,12 +536,11 @@ impl<'a> Widget for AppWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let app = self.0;
 
-        let vertical = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Fill(1),
-            Constraint::Length(1),
-        ]);
-        let [header_area, inner_area, footer_area] = vertical.areas(area);
+        // Reserve quit/help even when the terminal is too short for the header.
+        let [body_area, footer_area] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+        let [header_area, inner_area] =
+            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(body_area);
 
         self.render_tabs_view(header_area, buf);
         self.render_footer_view(footer_area, buf);
