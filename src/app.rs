@@ -5,9 +5,12 @@ use std::time::{Duration, Instant};
 
 use crate::components::help::{HelpModal, HelpState};
 use crate::file::parquet_ctx::ParquetCtx;
+use crate::jobs::WorkerEvent;
+use crate::tabs::visualize::filter::{FilterRequest, FilterUpdate, FilterWorker, RowFilter};
 use crate::tabs::visualize::search::{SearchRequest, SearchWorker};
 use crate::tabs::visualize::{SelectionMode, VisualizeState};
 use crate::tabs::{EventOutcome, TabManager};
+use crate::view::RowIndex;
 
 fn visible_data_rows(terminal_height: u16) -> usize {
     // Remove the tab header (3 lines) and footer (1 line), then let the table
@@ -58,6 +61,17 @@ pub struct App<'a> {
     pub state: AppState,
     search_worker: SearchWorker,
     search_started_at: Instant,
+    filter_worker: FilterWorker,
+    filter_started_at: Instant,
+    filter_base: Option<FilterBase>,
+}
+
+/// Kept only while a query runs, for read errors and superseding submissions.
+/// Explicit cancellation keeps the streamed results instead.
+struct FilterBase {
+    rows: RowIndex,
+    filters: Vec<RowFilter>,
+    incomplete: bool,
 }
 
 pub struct AppState {
@@ -269,12 +283,16 @@ impl<'a> App<'a> {
             state: AppState::new(),
             search_worker: SearchWorker::default(),
             search_started_at: Instant::now(),
+            filter_worker: FilterWorker::default(),
+            filter_started_at: Instant::now(),
+            filter_base: None,
         }
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
             self.poll_search();
+            self.poll_filter();
             self.prepare_viewport(terminal.size()?);
 
             let render_view = AppRenderView::from_app(self);
@@ -297,18 +315,25 @@ impl<'a> App<'a> {
 
         if is_visualize {
             let data = &self.parquet_ctx.sample_data;
+            let row_count = self.state.visualize().rows.len(data.total_rows);
             if self.state.visualize().selection_mode == SelectionMode::Column {
                 self.state.data_vertical_scroll = self
                     .state
                     .data_vertical_scroll
-                    .min(data.total_rows.saturating_sub(visible_rows));
+                    .min(row_count.saturating_sub(visible_rows));
             } else {
                 self.state
-                    .adjust_scroll_to_selection(visible_rows, data.total_rows);
+                    .adjust_scroll_to_selection(visible_rows, row_count);
             }
-            data.ensure_loaded(self.state.data_vertical_scroll(), visible_rows);
+            let result = data.ensure_view_loaded(
+                &self.state.visualize().rows,
+                self.state.data_vertical_scroll(),
+                visible_rows,
+            );
+            self.state.visualize_mut().row_error = result.err();
 
             let table = crate::components::DataTable::new(data)
+                .with_rows(&self.state.visualize().rows)
                 .with_width_cache(&self.state.visualize().column_widths)
                 .with_projection(self.state.visualize().projection())
                 .with_vertical_scroll(self.state.data_vertical_scroll())
@@ -346,7 +371,7 @@ impl<'a> App<'a> {
             .toast
             .as_ref()
             .map(|toast| toast.expires_at.saturating_duration_since(Instant::now()));
-        let timeout = if self.search_worker.is_running() {
+        let timeout = if self.search_worker.is_running() || self.filter_worker.is_running() {
             Some(timeout.map_or(Duration::from_millis(50), |timeout| {
                 timeout.min(Duration::from_millis(50))
             }))
@@ -409,8 +434,18 @@ impl<'a> App<'a> {
             self.search_worker.cancel();
             self.state.visualize_mut().search_status = Some("Search cancelled".into());
             if key_event.code == KeyCode::Esc {
+                if self.filter_worker.is_running() {
+                    self.cancel_filter();
+                }
                 return;
             }
+        }
+        if key_event.code == KeyCode::Esc
+            && self.filter_worker.is_running()
+            && self.state.visualize().prompt().is_none()
+        {
+            self.cancel_filter();
+            return;
         }
         let outcome = self
             .tabs
@@ -419,6 +454,10 @@ impl<'a> App<'a> {
             .unwrap();
         match outcome {
             EventOutcome::Consumed => return,
+            EventOutcome::FilterRows(expression) => {
+                self.start_filter(expression);
+                return;
+            }
             EventOutcome::FindCell {
                 backwards,
                 include_current,
@@ -428,7 +467,11 @@ impl<'a> App<'a> {
             }
             EventOutcome::CopyCell => {
                 let result = self.parquet_ctx.sample_data.clipboard_value(
-                    self.state.vertical_offset(),
+                    self.state
+                        .visualize()
+                        .rows
+                        .file_row(self.state.vertical_offset())
+                        .unwrap_or(self.parquet_ctx.sample_data.total_rows),
                     self.state
                         .visualize()
                         .source_column(self.state.visualize().selected_column)
@@ -494,7 +537,187 @@ impl<'a> App<'a> {
 
     fn exit(&mut self) {
         self.search_worker.cancel();
+        self.filter_worker.cancel();
         self.exit = true;
+    }
+
+    fn cancel_filter(&mut self) {
+        // Keep any already-queued matches too. A queued completion can turn
+        // this into a complete result before cancellation is necessary.
+        self.poll_filter();
+        if !self.filter_worker.is_running() {
+            return;
+        }
+        let scanned = self.filter_worker.current_row();
+        self.filter_worker.cancel();
+        self.filter_base = None;
+        let total = self.parquet_ctx.sample_data.total_rows;
+        let visualize = self.state.visualize_mut();
+        visualize.filter_running = false;
+        visualize.row_results_incomplete = true;
+        visualize.filter_status = Some(format!("Partial · stopped at row {scanned}/{total}"));
+    }
+
+    fn restore_filter_base(&mut self) {
+        if let Some(base) = self.filter_base.take() {
+            self.apply_row_index(base.rows);
+            let visualize = self.state.visualize_mut();
+            visualize.row_filters = base.filters;
+            visualize.row_results_incomplete = base.incomplete;
+        }
+    }
+
+    fn start_filter(&mut self, expression: String) {
+        self.filter_worker.cancel();
+        // A replacement scans the last applied candidate set, never just the
+        // prefix that happened to arrive from the superseded query.
+        self.restore_filter_base();
+        self.search_worker.cancel();
+        self.state.visualize_mut().filter_running = false;
+        if expression.is_empty() {
+            self.apply_row_index(RowIndex::All);
+            let visualize = self.state.visualize_mut();
+            visualize.row_filters.clear();
+            visualize.row_results_incomplete = false;
+            visualize.filter_status = None;
+            return;
+        }
+        let pattern = match crate::tabs::visualize::search::SearchPattern::new(&expression) {
+            Ok(pattern) => pattern,
+            Err(error) => {
+                self.state.show_toast(error, true);
+                return;
+            }
+        };
+        if self.parquet_ctx.sample_data_error.is_some() {
+            self.state.visualize_mut().filter_status =
+                Some("Row filter unavailable: preview could not be read".into());
+            return;
+        }
+        let data = &self.parquet_ctx.sample_data;
+        let visualize = self.state.visualize();
+        let columns: Vec<_> = (0..visualize.column_count(data.total_columns))
+            .filter_map(|i| visualize.source_column(i))
+            .filter_map(|i| data.flattened_columns.get(i).cloned())
+            .collect();
+        let filter = RowFilter::new(pattern.clone(), columns.iter().cloned());
+        let base = FilterBase {
+            rows: visualize.rows.clone(),
+            filters: visualize.row_filters.clone(),
+            incomplete: visualize.row_results_incomplete,
+        };
+        let request = FilterRequest {
+            path: self.parquet_ctx.file_path.clone(),
+            columns,
+            rows: visualize.rows.clone(),
+            pattern,
+        };
+        match self.filter_worker.start(request) {
+            Ok(()) => {
+                self.filter_base = Some(base);
+                self.filter_started_at = Instant::now();
+                self.apply_row_index(RowIndex::Filtered(std::sync::Arc::default()));
+                let visualize = self.state.visualize_mut();
+                visualize.row_filters.push(filter);
+                visualize.filter_running = true;
+                visualize.row_results_incomplete = true;
+                self.update_filter_progress();
+            }
+            Err(error) => {
+                self.state.visualize_mut().filter_status =
+                    Some(format!("Row filter failed: {error}"))
+            }
+        }
+    }
+
+    fn apply_row_index(&mut self, rows: RowIndex) {
+        let total = self.parquet_ctx.sample_data.total_rows;
+        let file_row = self
+            .state
+            .visualize()
+            .rows
+            .file_row(self.state.vertical_offset())
+            .unwrap_or(0);
+        let count = rows.len(total);
+        let position = rows
+            .position_at_or_after(file_row, total)
+            .unwrap_or(count.saturating_sub(1));
+        let visualize = self.state.visualize_mut();
+        visualize.rows = rows;
+        visualize.column_widths = std::cell::RefCell::default();
+        visualize.row_error = None;
+        visualize.search_status = None;
+        // A search against an earlier index must never move this new view.
+        self.search_worker.cancel();
+        if self.tabs.active_tab().to_string() == "Visualize" {
+            self.state
+                .jump_to_row(position, self.state.visible_data_rows(), count);
+        }
+    }
+
+    fn append_filter_update(&mut self, update: FilterUpdate) {
+        if update.rows.is_empty() {
+            return;
+        }
+        let visualize = self.state.visualize_mut();
+        if let RowIndex::Filtered(rows) = &mut visualize.rows {
+            *std::sync::Arc::make_mut(rows) |= update.rows;
+        }
+        // Results arrive in file order, so existing positions and the cursor
+        // stay fixed. Searches over the previous prefix remain valid too.
+    }
+
+    fn poll_filter(&mut self) {
+        // Bound UI work per frame even when a fast producer keeps filling the
+        // channel. The bounded channel applies backpressure to that producer.
+        for _ in 0..4 {
+            let Some(event) = self.filter_worker.poll_event() else {
+                break;
+            };
+            match event {
+                WorkerEvent::Update(update) => self.append_filter_update(update),
+                WorkerEvent::Finished(result) => {
+                    self.state.visualize_mut().filter_running = false;
+                    match result {
+                        Ok(result) => {
+                            self.apply_row_index(result.rows);
+                            let incomplete =
+                                self.filter_base.take().is_some_and(|base| base.incomplete);
+                            let visualize = self.state.visualize_mut();
+                            if let Some(filter) = visualize.row_filters.last_mut() {
+                                *filter = result.filter;
+                            }
+                            visualize.row_results_incomplete = incomplete;
+                            visualize.filter_status = incomplete
+                                .then(|| "Partial · filtered previously stopped results".into());
+                        }
+                        Err(error) => {
+                            self.restore_filter_base();
+                            self.state.visualize_mut().filter_status =
+                                Some(format!("Row filter failed: {error}"));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        if self.filter_worker.is_running() {
+            self.update_filter_progress();
+        }
+    }
+
+    fn update_filter_progress(&mut self) {
+        const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let elapsed = self.filter_started_at.elapsed();
+        let frame = (elapsed.as_millis() / 100 % FRAMES.len() as u128) as usize;
+        let scanned = self.filter_worker.current_row();
+        let total = self.parquet_ctx.sample_data.total_rows;
+        let count = self.state.visualize().rows.len(total);
+        self.state.visualize_mut().filter_status = Some(format!(
+            "{} {count} matches so far · Row {scanned}/{total} · {:.1}s · Esc stops",
+            FRAMES[frame],
+            elapsed.as_secs_f32(),
+        ));
     }
 
     fn start_search(&mut self, backwards: bool, include_current: bool) {
@@ -516,6 +739,7 @@ impl<'a> App<'a> {
             path: self.parquet_ctx.file_path.clone(),
             columns,
             total_rows: data.total_rows,
+            rows: visualize.rows.clone(),
             pattern,
             row: self.state.vertical_offset(),
             column: visualize.selected_column,
@@ -540,14 +764,31 @@ impl<'a> App<'a> {
                     self.state.jump_to_row(
                         hit.row,
                         self.state.visible_data_rows(),
-                        self.parquet_ctx.sample_data.total_rows,
+                        self.state
+                            .visualize()
+                            .rows
+                            .len(self.parquet_ctx.sample_data.total_rows),
                     );
                     let visualize = self.state.visualize_mut();
                     visualize.selected_column = hit.column;
                     visualize.selection_mode = SelectionMode::Cell;
-                    hit.wrapped.then(|| "Search wrapped".to_string())
+                    hit.wrapped.then(|| {
+                        if visualize.row_results_incomplete {
+                            "Search wrapped (results so far)"
+                        } else {
+                            "Search wrapped"
+                        }
+                        .to_string()
+                    })
                 }
-                Ok(None) => Some("No matches".into()),
+                Ok(None) => Some(
+                    if self.state.visualize().row_results_incomplete {
+                        "No matches found so far"
+                    } else {
+                        "No matches"
+                    }
+                    .into(),
+                ),
                 Err(error) => Some(format!("Search failed: {error}")),
             };
             self.state.visualize_mut().search_status = status;
@@ -578,6 +819,422 @@ mod tests {
         backend::TestBackend,
         style::{Color, Modifier},
     };
+
+    fn submit_row_filter(app: &mut App<'_>, expression: &str) {
+        app.handle_key_event(KeyCode::Char('&').into());
+        for c in expression.chars() {
+            app.handle_key_event(KeyCode::Char(c).into());
+        }
+        app.handle_key_event(KeyCode::Enter.into());
+    }
+    fn finish_filter(app: &mut App<'_>) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.filter_worker.is_running() {
+            assert!(Instant::now() < deadline, "filter did not finish");
+            app.poll_filter();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.state.visualize().filter_running);
+    }
+
+    #[test]
+    fn progressive_rows_are_browsable_before_completion_without_moving_the_cursor() {
+        let fixture = crate::tabs::visualize::filter::tests::fixture();
+        let ctx = ParquetCtx::from_file(fixture.0.to_str().unwrap()).unwrap();
+        let mut app = App::new(&ctx);
+        set_column_filter(&mut app, "^id$");
+        submit_row_filter(&mut app, "^[135]$");
+        let (worker, publish) = FilterWorker::test_stream();
+        app.filter_worker = worker;
+        publish(
+            2000,
+            WorkerEvent::Update(FilterUpdate {
+                rows: [1].into_iter().collect(),
+            }),
+        );
+        app.poll_filter();
+        assert!(app.filter_worker.is_running());
+        assert!(app.state.visualize().row_results_incomplete);
+        app.prepare_viewport(Size::new(100, 12));
+        assert_eq!(ctx.sample_data.loaded().rows[0][0], "1");
+        let mut copied = Vec::new();
+        app.handle_key_event_with_clipboard(KeyCode::Char('y').into(), &mut copied);
+        assert_eq!(copied, b"\x1b]52;c;MQ==\x07");
+        app.state.toast = None;
+        assert!(footer_at(&app, 120).0.contains("1+"));
+
+        publish(
+            4000,
+            WorkerEvent::Update(FilterUpdate {
+                rows: [3].into_iter().collect(),
+            }),
+        );
+        app.poll_filter();
+        assert_eq!(app.state.vertical_offset(), 0);
+        app.handle_key_event(KeyCode::Char('G').into());
+        assert_eq!(app.state.vertical_offset(), 1);
+        publish(
+            6000,
+            WorkerEvent::Update(FilterUpdate {
+                rows: [5].into_iter().collect(),
+            }),
+        );
+        app.poll_filter();
+        assert_eq!(app.state.vertical_offset(), 1);
+        assert_eq!(app.state.visualize().rows.file_row(1), Some(3));
+        app.prepare_viewport(Size::new(100, 12));
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+            .unwrap();
+        assert_eq!(terminal.backend().buffer()[(9, 6)].fg, Color::Red);
+
+        for key in ":6005".chars().map(KeyCode::Char).chain([KeyCode::Enter]) {
+            app.handle_key_event(key.into());
+        }
+        assert!(
+            app.state
+                .visualize()
+                .prompt()
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("incomplete")
+        );
+        app.handle_key_event(KeyCode::Esc.into()); // Cancel editing, keep scanning.
+        assert!(app.filter_worker.is_running());
+        set_search(&mut app, "^999$");
+        finish_search(&mut app);
+        assert_eq!(
+            app.state.visualize().search_status.as_deref(),
+            Some("No matches found so far")
+        );
+
+        let filter = app.state.visualize().row_filters.last().unwrap().clone();
+        publish(
+            6005,
+            WorkerEvent::Finished(Ok(crate::tabs::visualize::filter::FilterResult {
+                rows: RowIndex::Filtered(std::sync::Arc::new([1, 3, 5].into_iter().collect())),
+                filter,
+            })),
+        );
+        app.poll_filter();
+        assert!(!app.filter_worker.is_running());
+        assert!(!app.state.visualize().row_results_incomplete);
+        assert_eq!(app.state.vertical_offset(), 1);
+        assert!(!footer_at(&app, 120).0.contains("3+"));
+    }
+
+    #[test]
+    fn stopping_preserves_partial_rows_and_further_filters_cannot_claim_completeness() {
+        let fixture = crate::tabs::visualize::filter::tests::fixture();
+        let ctx = ParquetCtx::from_file(fixture.0.to_str().unwrap()).unwrap();
+        let mut app = App::new(&ctx);
+        set_column_filter(&mut app, "^id$");
+        submit_row_filter(&mut app, ".*");
+        let (worker, publish) = FilterWorker::test_stream();
+        app.filter_worker = worker;
+        publish(
+            2000,
+            WorkerEvent::Update(FilterUpdate {
+                rows: [0, 3].into_iter().collect(),
+            }),
+        );
+        app.handle_key_event(KeyCode::Esc.into()); // Drains queued matches before stopping.
+        assert_eq!(app.state.visualize().rows.len(6005), 2);
+        assert!(app.state.visualize().row_results_incomplete);
+        assert!(!app.filter_worker.is_running());
+        assert!(
+            app.state
+                .visualize()
+                .filter_status
+                .as_ref()
+                .unwrap()
+                .contains("Partial")
+        );
+        submit_row_filter(&mut app, "^3$");
+        finish_filter(&mut app);
+        assert_eq!(app.state.visualize().rows.len(6005), 1);
+        assert_eq!(app.state.visualize().rows.file_row(0), Some(3));
+        assert!(app.state.visualize().row_results_incomplete);
+        submit_row_filter(&mut app, "");
+        assert!(!app.state.visualize().row_results_incomplete);
+        assert!(matches!(app.state.visualize().rows, RowIndex::All));
+    }
+
+    #[test]
+    fn streaming_failures_restore_the_base_and_replacements_scan_the_full_candidate_set() {
+        let fixture = crate::tabs::visualize::filter::tests::fixture();
+        let ctx = ParquetCtx::from_file(fixture.0.to_str().unwrap()).unwrap();
+        let mut app = App::new(&ctx);
+        set_column_filter(&mut app, "^id$");
+        submit_row_filter(&mut app, ".*");
+        let (worker, publish) = FilterWorker::test_stream();
+        app.filter_worker = worker;
+        publish(
+            2000,
+            WorkerEvent::Update(FilterUpdate {
+                rows: [0, 3].into_iter().collect(),
+            }),
+        );
+        app.poll_filter();
+        assert_eq!(app.state.visualize().rows.len(6005), 2);
+        publish(2000, WorkerEvent::Finished(Err("read failed".into())));
+        app.poll_filter();
+        assert!(matches!(app.state.visualize().rows, RowIndex::All));
+        assert!(app.state.visualize().row_filters.is_empty());
+        assert!(!app.state.visualize().row_results_incomplete);
+        assert!(
+            app.state
+                .visualize()
+                .filter_status
+                .as_ref()
+                .unwrap()
+                .contains("read failed")
+        );
+
+        submit_row_filter(&mut app, "^[03]$");
+        let (worker, publish) = FilterWorker::test_stream();
+        app.filter_worker = worker;
+        publish(
+            2000,
+            WorkerEvent::Update(FilterUpdate {
+                rows: [0].into_iter().collect(),
+            }),
+        );
+        app.poll_filter();
+        submit_row_filter(&mut app, "^5$");
+        finish_filter(&mut app);
+        assert_eq!(app.state.visualize().rows.file_row(0), Some(5));
+        assert_eq!(app.state.visualize().row_filters.len(), 1);
+        assert_eq!(app.state.visualize().row_filters[0].expression(), "^5$");
+        assert!(!app.state.visualize().row_results_incomplete);
+    }
+
+    #[test]
+    fn applied_row_filters_highlight_only_their_captured_columns_and_clear_independently_of_find() {
+        let fixture = crate::tabs::visualize::filter::tests::fixture();
+        let ctx = ParquetCtx::from_file(fixture.0.to_str().unwrap()).unwrap();
+        let mut app = App::new(&ctx);
+        set_column_filter(&mut app, "^status$");
+        submit_row_filter(&mut app, "^failed$");
+        finish_filter(&mut app);
+        set_column_filter(&mut app, "");
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        let mut render = |app: &mut App<'_>| {
+            app.prepare_viewport(Size::new(100, 12));
+            terminal
+                .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(app), frame))
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let buf = render(&mut app);
+        assert_eq!(buf[(19, 5)].fg, Color::Red); // Status of original file row 1.
+        assert_ne!(buf[(29, 7)].fg, Color::Red); // "Failed" in message was outside the filter scope.
+
+        set_column_filter(&mut app, "^message$");
+        submit_row_filter(&mut app, "^failed$");
+        finish_filter(&mut app);
+        set_column_filter(&mut app, "");
+        let buf = render(&mut app);
+        assert_eq!(app.state.visualize().rows.file_row(0), Some(6));
+        assert_eq!(buf[(19, 5)].fg, Color::Red);
+        assert_eq!(buf[(29, 5)].fg, Color::Red);
+
+        set_search(&mut app, "^6$");
+        finish_search(&mut app);
+        let buf = render(&mut app);
+        assert_eq!(buf[(9, 5)].fg, Color::Red);
+        assert_eq!(buf[(19, 5)].fg, Color::Red);
+        assert_eq!(buf[(29, 5)].fg, Color::Red);
+        set_search(&mut app, "");
+        let buf = render(&mut app);
+        assert_ne!(buf[(9, 5)].fg, Color::Red);
+        assert_eq!(buf[(19, 5)].fg, Color::Red);
+        assert_eq!(buf[(29, 5)].fg, Color::Red);
+
+        set_search(&mut app, "^6$");
+        finish_search(&mut app);
+        submit_row_filter(&mut app, "");
+        let buf = render(&mut app);
+        let selected_y =
+            5 + (app.state.vertical_offset() - app.state.data_vertical_scroll()) as u16;
+        assert_eq!(buf[(9, selected_y)].fg, Color::Red);
+        assert_ne!(buf[(19, selected_y)].fg, Color::Red);
+        assert_ne!(buf[(29, selected_y)].fg, Color::Red);
+    }
+
+    #[test]
+    fn row_filters_compose_with_columns_navigation_copy_and_find_and_clear_independently() {
+        let fixture = crate::tabs::visualize::filter::tests::fixture();
+        let ctx = ParquetCtx::from_file(fixture.0.to_str().unwrap()).unwrap();
+        let mut app = App::new(&ctx);
+        app.prepare_viewport(Size::new(120, 12));
+        set_column_filter(&mut app, "^status$");
+        submit_row_filter(&mut app, "^failed$");
+        // Submission opens an explicitly incomplete result for streamed matches.
+        assert!(app.state.visualize().prompt().is_none());
+        assert!(app.state.visualize().rows.is_empty(6005));
+        assert!(app.state.visualize().row_results_incomplete);
+        finish_filter(&mut app);
+        assert_eq!(app.state.visualize().rows.len(6005), 2002);
+        set_column_filter(&mut app, "^id$");
+        submit_row_filter(&mut app, "^(0|3000|6000)$");
+        finish_filter(&mut app);
+        assert_eq!(app.state.visualize().rows.len(6005), 3);
+        assert_eq!(
+            app.state
+                .visualize()
+                .row_filters
+                .iter()
+                .map(|filter| filter.expression())
+                .collect::<Vec<_>>(),
+            ["^failed$", "^(0|3000|6000)$"]
+        );
+        set_column_filter(&mut app, "");
+        assert_eq!(app.state.visualize().rows.len(6005), 3);
+        app.handle_key_event(KeyCode::Char('G').into());
+        assert_eq!(app.state.vertical_offset(), 2);
+        app.state.visualize_mut().selection_mode = SelectionMode::Cell;
+        app.state.visualize_mut().selected_column = 0;
+        let mut copied = Vec::new();
+        app.handle_key_event_with_clipboard(KeyCode::Char('y').into(), &mut copied);
+        use base64::Engine as _;
+        assert_eq!(
+            copied,
+            format!(
+                "\x1b]52;c;{}\x07",
+                base64::engine::general_purpose::STANDARD.encode("6000")
+            )
+            .as_bytes()
+        );
+        for key in [KeyCode::Char(':'), KeyCode::Char('2'), KeyCode::Enter] {
+            app.handle_key_event(key.into());
+        }
+        assert_eq!(app.state.vertical_offset(), 1); // first file row >= 2 is file row 3001
+        set_search(&mut app, "^6000$");
+        finish_search(&mut app);
+        assert_eq!(app.state.vertical_offset(), 2);
+        assert_eq!(app.state.visualize().selected_column, 0);
+        set_search(&mut app, "^5999$");
+        finish_search(&mut app);
+        assert_eq!(
+            app.state.visualize().search_status.as_deref(),
+            Some("No matches")
+        );
+        assert_eq!(app.state.vertical_offset(), 2);
+        app.prepare_viewport(Size::new(120, 12));
+        let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render_app(&AppRenderView::from_app(&app), frame))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        for (line, number) in [(5, "1"), (6, "3001"), (7, "6001")] {
+            let gutter: String = (0..6).map(|x| buf[(x, line)].symbol()).collect();
+            assert_eq!(gutter.trim(), number);
+        }
+        let selected_file = app
+            .state
+            .visualize()
+            .rows
+            .file_row(app.state.vertical_offset())
+            .unwrap();
+        submit_row_filter(&mut app, "");
+        assert!(matches!(app.state.visualize().rows, RowIndex::All));
+        assert!(app.state.visualize().row_filters.is_empty());
+        assert!(app.state.visualize().search.is_some());
+        assert_eq!(app.state.vertical_offset(), selected_file);
+        app.prepare_viewport(Size::new(120, 12));
+        let win = ctx.sample_data.loaded();
+        assert_eq!(win.rows[selected_file - win.start][0], "6000");
+    }
+
+    #[test]
+    fn row_filter_validation_cancellation_empty_results_and_tab_switches_preserve_state() {
+        let fixture = crate::tabs::visualize::filter::tests::fixture();
+        let ctx = ParquetCtx::from_file(fixture.0.to_str().unwrap()).unwrap();
+        let mut app = App::new(&ctx);
+        set_column_filter(&mut app, "^id$");
+        submit_row_filter(&mut app, "^(5|2501|6004)$");
+        finish_filter(&mut app);
+        let index = app.state.visualize().rows.clone();
+        submit_row_filter(&mut app, "[");
+        assert!(
+            app.state
+                .visualize()
+                .prompt()
+                .unwrap()
+                .error
+                .as_deref()
+                .unwrap()
+                .starts_with("Invalid regex:")
+        );
+        assert!(app.state.visualize().rows.same_rows(&index));
+        app.handle_key_event(KeyCode::Esc.into());
+        submit_row_filter(&mut app, "^5$");
+        let (worker, publish) = FilterWorker::test_stream();
+        app.filter_worker = worker;
+        publish(
+            100,
+            WorkerEvent::Update(FilterUpdate {
+                rows: [5].into_iter().collect(),
+            }),
+        );
+        app.poll_filter();
+        app.handle_key_event(KeyCode::Esc.into());
+        assert!(!app.filter_worker.is_running());
+        assert_eq!(app.state.visualize().rows.len(6005), 1);
+        assert!(app.state.visualize().row_results_incomplete);
+        let stopped = app.state.visualize().rows.clone();
+        publish(
+            6005,
+            WorkerEvent::Update(FilterUpdate {
+                rows: [2501].into_iter().collect(),
+            }),
+        );
+        app.poll_filter();
+        assert!(app.state.visualize().rows.same_rows(&stopped));
+        // Clearing a stopped scan restores the whole file before a fresh query.
+        submit_row_filter(&mut app, "");
+        submit_row_filter(&mut app, "^(5|2501|6004)$");
+        finish_filter(&mut app);
+        submit_row_filter(&mut app, "^2501$");
+        app.handle_key_event(KeyCode::Tab.into());
+        app.state.vertical_offset = 3;
+        finish_filter(&mut app);
+        assert_eq!(app.state.vertical_offset(), 3); // background completion cannot move another tab
+        app.handle_key_event(KeyCode::BackTab.into());
+        assert_eq!(app.state.visualize().rows.len(6005), 1);
+        assert_eq!(app.state.visualize().rows.file_row(0), Some(2501));
+        app.prepare_viewport(Size::new(80, 12));
+        assert_eq!(ctx.sample_data.loaded().rows[0][0], "2501");
+        // A new command supersedes the old generation and its partial result.
+        submit_row_filter(&mut app, "no-match");
+        submit_row_filter(&mut app, "^2501$");
+        finish_filter(&mut app);
+        assert_eq!(app.state.visualize().rows.len(6005), 1);
+        assert!(
+            !app.state
+                .visualize()
+                .row_filters
+                .iter()
+                .any(|filter| filter.expression() == "no-match")
+        );
+        submit_row_filter(&mut app, "missing");
+        finish_filter(&mut app);
+        assert_eq!(app.state.visualize().rows.len(6005), 0);
+        app.prepare_viewport(Size::new(80, 12));
+        assert!(ctx.sample_data.loaded().rows.is_empty());
+        let mut copied = Vec::new();
+        app.handle_key_event_with_clipboard(KeyCode::Char('y').into(), &mut copied);
+        assert!(copied.is_empty());
+        assert_eq!(app.state.toast().unwrap().message, "No cell selected");
+        submit_row_filter(&mut app, "");
+        app.prepare_viewport(Size::new(80, 12));
+        assert_eq!(app.state.visualize().projection(), Some([0].as_slice()));
+        assert_eq!(ctx.sample_data.loaded().rows[0][0], "0");
+    }
 
     fn set_search(app: &mut App<'_>, expression: &str) {
         app.handle_key_event(KeyCode::Char('/').into());
@@ -1144,6 +1801,19 @@ mod tests {
                     "{text}"
                 );
             }
+
+            app.handle_key_event(KeyCode::Char('&').into());
+            assert_eq!(render(&mut app).1, expected_shortcuts);
+            app.handle_key_event(KeyCode::Char('[').into());
+            app.handle_key_event(KeyCode::Enter.into());
+            assert_eq!(render(&mut app).1, expected_shortcuts);
+            app.handle_key_event(KeyCode::Esc.into());
+            submit_row_filter(&mut app, ".*");
+            assert_eq!(render(&mut app).1, expected_shortcuts);
+            finish_filter(&mut app);
+            assert_eq!(render(&mut app).1, expected_shortcuts);
+            submit_row_filter(&mut app, "");
+            assert_eq!(render(&mut app).1, expected_shortcuts);
 
             app.handle_key_event(KeyCode::Char('*').into());
             assert_eq!(render(&mut app).1, expected_shortcuts);

@@ -10,10 +10,12 @@ use crate::{
 };
 
 mod command;
+pub(crate) mod filter;
 pub(crate) mod search;
 
 pub use command::{CommandPrompt, PromptKind};
 use command::{PromptEvent, VisualizeCommand, parse_command};
+pub use filter::RowFilter;
 use search::SearchPattern;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -22,6 +24,12 @@ pub struct VisualizeState {
     pub selection_mode: SelectionMode,
     pub selected_column: usize,
     pub column_filter: Option<String>,
+    pub rows: crate::view::RowIndex,
+    pub row_filters: Vec<RowFilter>,
+    pub(crate) filter_status: Option<String>,
+    pub(crate) filter_running: bool,
+    pub(crate) row_results_incomplete: bool,
+    pub(crate) row_error: Option<String>,
     pub(crate) search: Option<SearchPattern>,
     pub(crate) search_status: Option<String>,
     projection: Option<Vec<usize>>,
@@ -159,6 +167,12 @@ impl VisualizeTab {
         state: &mut AppState,
     ) -> Result<(), String> {
         match command {
+            VisualizeCommand::FilterRows(expression) => {
+                if !expression.is_empty() {
+                    SearchPattern::new(&expression)?;
+                }
+                Ok(())
+            }
             VisualizeCommand::Find(expression) => {
                 let search = if expression.is_empty() {
                     None
@@ -220,7 +234,16 @@ impl VisualizeTab {
                     });
                 }
 
-                state.jump_to_row(row - 1, state.visible_data_rows(), max_rows);
+                let index = &state.visualize().rows;
+                let position = index.position_at_or_after(row - 1, max_rows).ok_or(
+                    if state.visualize().row_results_incomplete {
+                        "No match found at or after that row yet; results are incomplete"
+                    } else {
+                        "No visible row at or after that file row"
+                    },
+                )?;
+                let count = index.len(max_rows);
+                state.jump_to_row(position, state.visible_data_rows(), count);
                 Ok(())
             }
         }
@@ -250,6 +273,9 @@ impl VisualizeTab {
                 match result {
                     Ok(()) => {
                         state.visualize_mut().cancel_prompt();
+                        if kind == PromptKind::Rows {
+                            return EventOutcome::FilterRows(input);
+                        }
                         if kind == PromptKind::Find && state.visualize().search.is_some() {
                             return EventOutcome::FindCell {
                                 backwards: false,
@@ -280,7 +306,7 @@ impl Tab for VisualizeTab {
             return Ok(self.handle_prompt_event(key_event, state));
         }
 
-        let max_rows = self.max_rows.unwrap_or(0);
+        let max_rows = state.visualize().rows.len(self.max_rows.unwrap_or(0));
         let max_columns = state
             .visualize()
             .column_count(self.max_columns.unwrap_or(0));
@@ -288,6 +314,10 @@ impl Tab for VisualizeTab {
         let selection_mode = state.visualize().selection_mode;
 
         let outcome = match key_event.code {
+            KeyCode::Char('&') => {
+                state.visualize_mut().begin_prompt(PromptKind::Rows);
+                EventOutcome::Consumed
+            }
             KeyCode::Char('/') => {
                 state.visualize_mut().begin_prompt(PromptKind::Find);
                 EventOutcome::Consumed
@@ -471,11 +501,18 @@ impl Tab for VisualizeTab {
                     ),
                     ("n / N", "Jump to the next / previous match"),
                     (
+                        "&",
+                        "Narrow the current rows to those with a visible cell matching a case-insensitive regex.",
+                    ),
+                    (
                         "*",
                         "Choose and order columns with a regex that ignores case. E.g. ^id$|name$",
                     ),
                     (":", "Go to specific row number. E.g. :42"),
-                    ("Esc", "Cancel a running search."),
+                    (
+                        "Esc",
+                        "Cancel find; stop row filtering and keep partial results.",
+                    ),
                 ],
             },
             HelpSection {
@@ -490,6 +527,7 @@ impl Tab for VisualizeTab {
                     ),
                     ("Empty / + Enter", "Clear the search."),
                     ("Empty * + Enter", "Show all columns."),
+                    ("Empty & + Enter", "Clear all row filters."),
                     (
                         "? / q",
                         "Type these characters as text. Press Esc to use shortcuts.",

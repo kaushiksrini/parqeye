@@ -1,16 +1,12 @@
 //! Cell search over bounded chunks. A single worker retains only its latest
 //! chunk, so repeated n/N within it reuse decoded values without a file scan.
 use crate::file::sample_data::ParquetSampleData;
-use regex::{Regex, RegexBuilder};
-use std::{
-    io,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::{self, Receiver, Sender},
-    },
-    thread,
+use crate::{
+    jobs::{Task, Worker},
+    view::RowIndex,
 };
+use regex::{Regex, RegexBuilder};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const CHUNK_ROWS: usize = 2_000;
 
@@ -47,6 +43,7 @@ pub(crate) struct SearchRequest {
     /// Names in visible order, including columns horizontally off screen.
     pub columns: Vec<String>,
     pub total_rows: usize,
+    pub rows: RowIndex,
     pub pattern: SearchPattern,
     pub row: usize,
     pub column: usize,
@@ -61,138 +58,31 @@ pub(crate) struct SearchHit {
     pub wrapped: bool,
 }
 
-struct Job {
-    generation: u64,
-    request: SearchRequest,
-    cancel: Arc<AtomicBool>,
-    current_row: Arc<AtomicUsize>,
-}
+pub(crate) type SearchWorker = Worker<SearchRequest>;
 
-struct Reply {
-    generation: u64,
-    result: Result<Option<SearchHit>, String>,
-}
-
-struct Pending {
-    generation: u64,
-    cancel: Arc<AtomicBool>,
-    current_row: Arc<AtomicUsize>,
-}
-
-#[derive(Default)]
-pub(crate) struct SearchWorker {
-    sender: Option<Sender<Job>>,
-    receiver: Option<Receiver<Reply>>,
-    generation: u64,
-    pending: Option<Pending>,
-}
-
-impl SearchWorker {
-    pub fn start(&mut self, request: SearchRequest) -> io::Result<()> {
-        self.cancel();
-        if self.sender.is_none() {
-            let (jobs_tx, jobs_rx) = mpsc::channel::<Job>();
-            let (results_tx, results_rx) = mpsc::channel();
-            thread::Builder::new()
-                .name("parqeye-find".into())
-                .spawn(move || {
-                    let mut cache = ChunkCache::default();
-                    while let Ok(job) = jobs_rx.recv() {
-                        if job.cancel.load(Ordering::Relaxed) {
-                            continue;
-                        }
-                        let result = find(&job.request, &job.cancel, &job.current_row, &mut cache);
-                        if !job.cancel.load(Ordering::Relaxed)
-                            && results_tx
-                                .send(Reply {
-                                    generation: job.generation,
-                                    result,
-                                })
-                                .is_err()
-                        {
-                            break;
-                        }
-                    }
-                })?;
-            self.sender = Some(jobs_tx);
-            self.receiver = Some(results_rx);
-        }
-        self.generation += 1;
-        let cancel = Arc::new(AtomicBool::new(false));
-        // Progress is a one-based file row, not a fresh count for every n/N.
-        let current_row = Arc::new(AtomicUsize::new(
-            request.row.saturating_add(1).min(request.total_rows),
-        ));
-        self.sender
-            .as_ref()
-            .unwrap()
-            .send(Job {
-                generation: self.generation,
-                request,
-                cancel: Arc::clone(&cancel),
-                current_row: Arc::clone(&current_row),
-            })
-            .map_err(|_| io::Error::other("search worker stopped"))?;
-        self.pending = Some(Pending {
-            generation: self.generation,
-            cancel,
-            current_row,
-        });
-        Ok(())
+impl Task for SearchRequest {
+    type Output = Option<SearchHit>;
+    type Update = std::convert::Infallible;
+    type Cache = ChunkCache;
+    const NAME: &'static str = "parqeye-find";
+    fn initial_progress(&self) -> usize {
+        self.rows
+            .file_row(self.row)
+            .map_or(0, |row| row.saturating_add(1).min(self.total_rows))
     }
-
-    pub fn is_running(&self) -> bool {
-        self.pending.is_some()
-    }
-
-    /// One-based file row currently being searched; zero when idle or empty.
-    pub fn current_row(&self) -> usize {
-        self.pending
-            .as_ref()
-            .map_or(0, |job| job.current_row.load(Ordering::Relaxed))
-    }
-
-    pub fn cancel(&mut self) {
-        if let Some(job) = self.pending.take() {
-            job.cancel.store(true, Ordering::Relaxed);
-        }
-    }
-
-    pub fn poll(&mut self) -> Option<Result<Option<SearchHit>, String>> {
-        let receiver = self.receiver.as_ref()?;
-        loop {
-            match receiver.try_recv() {
-                Ok(reply) => {
-                    if self
-                        .pending
-                        .as_ref()
-                        .is_some_and(|job| job.generation == reply.generation)
-                    {
-                        self.pending = None;
-                        return Some(reply.result);
-                    }
-                }
-                Err(mpsc::TryRecvError::Empty) => return None,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.sender = None;
-                    return self
-                        .pending
-                        .take()
-                        .map(|_| Err("Search worker stopped".into()));
-                }
-            }
-        }
-    }
-}
-
-impl Drop for SearchWorker {
-    fn drop(&mut self) {
-        self.cancel();
+    fn run(
+        &self,
+        cancel: &AtomicBool,
+        progress: &AtomicUsize,
+        cache: &mut ChunkCache,
+        _: &mut dyn FnMut(Self::Update) -> bool,
+    ) -> Result<Self::Output, String> {
+        find(self, cancel, progress, cache)
     }
 }
 
 #[derive(Default)]
-struct ChunkCache {
+pub(crate) struct ChunkCache {
     path: String,
     columns: Vec<String>,
     start: usize,
@@ -234,8 +124,8 @@ fn find(
     cache: &mut ChunkCache,
 ) -> Result<Option<SearchHit>, String> {
     let columns = request.columns.len();
-    let cells = request
-        .total_rows
+    let visible_rows = request.rows.len(request.total_rows);
+    let cells = visible_rows
         .checked_mul(columns)
         .ok_or("Too many cells to search")?;
     if cells == 0 {
@@ -243,7 +133,7 @@ fn find(
     }
     cache.prepare(request);
     let mut position =
-        request.row.min(request.total_rows - 1) * columns + request.column.min(columns - 1);
+        request.row.min(visible_rows - 1) * columns + request.column.min(columns - 1);
     let mut wrapped = false;
     let advance = |position: &mut usize, wrapped: &mut bool| {
         if request.backwards {
@@ -263,16 +153,47 @@ fn find(
     if !request.include_current {
         advance(&mut position, &mut wrapped);
     }
-    let mut last_row = None;
+    let mut filtered = match &request.rows {
+        RowIndex::Filtered(rows) => Some((rows, rows.iter())),
+        RowIndex::All => None,
+    };
+    let mut last_position: Option<usize> = None;
+    let mut row = 0;
     for _ in 0..cells {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        let row = position / columns;
+        let view_row = position / columns;
         let column = position % columns;
-        if last_row != Some(row) {
+        if last_position != Some(view_row) {
+            row = if let Some((rows, iter)) = &mut filtered {
+                let sequential = last_position.is_some_and(|previous| {
+                    if request.backwards {
+                        previous.checked_sub(1) == Some(view_row)
+                    } else {
+                        previous + 1 == view_row
+                    }
+                });
+                if !sequential {
+                    *iter = rows.iter();
+                    let file_row = rows.select(view_row as u64).ok_or("Invalid visible row")?;
+                    if request.backwards {
+                        iter.advance_back_to(file_row);
+                    } else {
+                        iter.advance_to(file_row);
+                    }
+                }
+                if request.backwards {
+                    iter.next_back()
+                } else {
+                    iter.next()
+                }
+                .ok_or("Invalid visible row")? as usize
+            } else {
+                view_row
+            };
             current_row.store(row + 1, Ordering::Relaxed);
-            last_row = Some(row);
+            last_position = Some(view_row);
         }
         let values = cache.row(request, row)?;
         if cancel.load(Ordering::Relaxed) {
@@ -283,7 +204,7 @@ fn find(
             .is_some_and(|value| request.pattern.is_match(value))
         {
             return Ok(Some(SearchHit {
-                row,
+                row: position / columns,
                 column,
                 wrapped,
             }));
@@ -301,6 +222,7 @@ mod tests {
         SearchRequest {
             path: "cached-only.parquet".into(),
             columns: vec!["a".into(), "b".into()],
+            rows: RowIndex::All,
             total_rows: 3,
             pattern: SearchPattern::new(expression).unwrap(),
             row: 0,
@@ -330,6 +252,57 @@ mod tests {
             cache,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn filtered_find_skips_excluded_rows_and_preserves_file_progress_in_both_directions() {
+        let mut request = request("^error two$");
+        let mut cache = cache(&request);
+        request.rows = RowIndex::Filtered(std::sync::Arc::new([0, 2].into_iter().collect()));
+        assert_eq!(run(&request, &mut cache), None);
+        request.pattern = SearchPattern::new("^NULL$").unwrap();
+        let progress = AtomicUsize::new(0);
+        assert_eq!(
+            find(&request, &AtomicBool::new(false), &progress, &mut cache).unwrap(),
+            Some(SearchHit {
+                row: 1,
+                column: 0,
+                wrapped: false
+            })
+        );
+        assert_eq!(progress.load(Ordering::Relaxed), 3);
+        request.row = 1;
+        request.pattern = SearchPattern::new("error|érror").unwrap();
+        request.backwards = true;
+        request.include_current = false;
+        assert_eq!(
+            run(&request, &mut cache),
+            Some(SearchHit {
+                row: 0,
+                column: 1,
+                wrapped: false
+            })
+        );
+        request.row = 0;
+        request.column = 0;
+        assert_eq!(
+            run(&request, &mut cache),
+            Some(SearchHit {
+                row: 0,
+                column: 1,
+                wrapped: true
+            })
+        );
+        request.backwards = false;
+        request.row = 1;
+        assert_eq!(
+            run(&request, &mut cache),
+            Some(SearchHit {
+                row: 0,
+                column: 0,
+                wrapped: true
+            })
+        );
     }
 
     #[test]
@@ -482,53 +455,5 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn worker_discards_stale_results_and_cancelled_generations() {
-        let (sender, receiver) = mpsc::channel();
-        let mut worker = SearchWorker {
-            sender: None,
-            receiver: Some(receiver),
-            generation: 2,
-            pending: Some(Pending {
-                generation: 2,
-                cancel: Arc::new(AtomicBool::new(false)),
-                current_row: Arc::new(AtomicUsize::new(0)),
-            }),
-        };
-        sender
-            .send(Reply {
-                generation: 1,
-                result: Ok(Some(SearchHit {
-                    row: 99,
-                    column: 99,
-                    wrapped: false,
-                })),
-            })
-            .unwrap();
-        sender
-            .send(Reply {
-                generation: 2,
-                result: Ok(None),
-            })
-            .unwrap();
-        assert_eq!(worker.poll(), Some(Ok(None)));
-        assert!(!worker.is_running());
-        let cancel = Arc::new(AtomicBool::new(false));
-        worker.pending = Some(Pending {
-            generation: 3,
-            cancel: Arc::clone(&cancel),
-            current_row: Arc::new(AtomicUsize::new(0)),
-        });
-        worker.cancel();
-        assert!(cancel.load(Ordering::Relaxed));
-        sender
-            .send(Reply {
-                generation: 3,
-                result: Ok(None),
-            })
-            .unwrap();
-        assert_eq!(worker.poll(), None);
     }
 }

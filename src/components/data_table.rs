@@ -1,6 +1,6 @@
 use crate::file::sample_data::ParquetSampleData;
-use crate::tabs::visualize::SelectionMode;
 use crate::tabs::visualize::search::SearchPattern;
+use crate::tabs::visualize::{RowFilter, SelectionMode};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -135,6 +135,8 @@ pub struct DataTable<'a> {
     pub data: &'a ParquetSampleData,
     projection: Option<&'a [usize]>,
     search: Option<&'a SearchPattern>,
+    row_filters: &'a [RowFilter],
+    rows: Option<&'a crate::view::RowIndex>,
     width_cache: Option<&'a RefCell<ColumnWidthCache>>,
     local_width_cache: RefCell<ColumnWidthCache>,
     pub title: String,
@@ -160,6 +162,8 @@ impl<'a> DataTable<'a> {
             data,
             projection: None,
             search: None,
+            row_filters: &[],
+            rows: None,
             width_cache: None,
             local_width_cache: RefCell::default(),
             title: format!("Data Preview ({} rows)", commas(data.total_rows as u64)),
@@ -185,8 +189,18 @@ impl<'a> DataTable<'a> {
         self
     }
 
+    pub fn with_rows(mut self, rows: &'a crate::view::RowIndex) -> Self {
+        self.rows = Some(rows);
+        self
+    }
+
     pub(crate) fn with_search(mut self, search: Option<&'a SearchPattern>) -> Self {
         self.search = search;
+        self
+    }
+
+    pub(crate) fn with_row_filters(mut self, filters: &'a [RowFilter]) -> Self {
+        self.row_filters = filters;
         self
     }
 
@@ -295,11 +309,17 @@ impl<'a> DataTable<'a> {
 
     /// Digits in the row number gutter for a render area `area_height` tall.
     fn row_num_digits(&self, area_height: u16) -> u16 {
-        row_num_digits(
-            self.vertical_scroll,
-            Self::visible_rows(area_height),
-            self.data.total_rows,
-        )
+        let height = Self::visible_rows(area_height);
+        if let Some(index) = self.rows {
+            let last = self
+                .vertical_scroll
+                .saturating_add(usize::from(height).saturating_sub(1))
+                .min(index.len(self.data.total_rows).saturating_sub(1));
+            let file_row = index.file_row(last).unwrap_or(0);
+            row_num_digits(file_row, 1, self.data.total_rows)
+        } else {
+            row_num_digits(self.vertical_scroll, height, self.data.total_rows)
+        }
     }
 
     /// Maximum horizontal scroll offset for a render area; the last column is
@@ -378,7 +398,12 @@ impl<'a> DataTable<'a> {
         let mut y = area.y;
 
         for (row_idx, _) in rows.iter().take(usize::from(area.height)).enumerate() {
-            let actual_row_num = row_idx + self.vertical_scroll + 1;
+            let position = row_idx + self.vertical_scroll;
+            let actual_row_num = self
+                .rows
+                .and_then(|index| index.file_row(position))
+                .unwrap_or(position)
+                + 1;
             let is_selected = self
                 .selected_row
                 .is_some_and(|selected| row_idx + self.vertical_scroll == selected);
@@ -453,19 +478,28 @@ impl<'a> DataTable<'a> {
                 break;
             }
 
-            let column_selected = self.selected_column == Some(self.horizontal_scroll + column_idx);
+            let visible_column = self.horizontal_scroll + column_idx;
+            let column_selected = self.selected_column == Some(visible_column);
             let highlighted = match self.selection_mode {
                 SelectionMode::Row => is_selected,
                 SelectionMode::Column => column_selected,
                 SelectionMode::Cell => is_selected && column_selected,
             };
-            let matches_search = self.search.is_some_and(|search| search.is_match(cell_data));
-            let style = if highlighted && matches_search {
+            let source_column = self
+                .projection
+                .map_or(visible_column, |indices| indices[visible_column]);
+            let column_name = &self.data.flattened_columns[source_column];
+            let matches_pattern = self.search.is_some_and(|search| search.is_match(cell_data))
+                || self
+                    .row_filters
+                    .iter()
+                    .any(|filter| filter.matches(column_name, cell_data));
+            let style = if highlighted && matches_pattern {
                 ratatui::style::Style::default()
                     .bg(self.selected_color)
                     .fg(Color::Red)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-            } else if matches_search {
+            } else if matches_pattern {
                 ratatui::style::Style::default().fg(Color::Red)
             } else if highlighted {
                 ratatui::style::Style::default()
@@ -629,6 +663,65 @@ impl Renderable for ParquetSampleData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_filter_highlights_preserve_scope_and_share_find_style_after_reordering() {
+        let data = ParquetSampleData::from_rows(
+            &["status", "message", "id"],
+            vec![
+                vec!["Failed".into(), "Failed".into(), "0".into()],
+                vec![
+                    "Failed".into(),
+                    format!("{}timeout", "x".repeat(100)),
+                    "1".into(),
+                ],
+                vec!["ok".into(), "other".into(), "2".into()],
+            ],
+        );
+        let filters = [
+            RowFilter::new(SearchPattern::new("^failed$").unwrap(), ["status".into()]),
+            RowFilter::new(SearchPattern::new("timeout").unwrap(), ["message".into()]),
+        ];
+        let search = SearchPattern::new("^0$").unwrap();
+        let area = Rect::new(0, 0, 90, 5);
+        let table = || {
+            DataTable::new(&data)
+                .with_projection(Some(&[1, 2, 0]))
+                .with_selected_row(Some(0))
+                .with_selection(SelectionMode::Cell, 2)
+        };
+        let mut buf = Buffer::empty(area);
+        table()
+            .with_search(Some(&search))
+            .with_row_filters(&filters)
+            .render(area, &mut buf);
+        assert_eq!(buf[(9, 2)].fg, Color::Reset); // Same text, outside the original scope.
+        assert_eq!(buf[(36, 2)].fg, Color::Red); // Find and both filters compose.
+        assert_eq!(buf[(46, 2)].fg, Color::Red);
+        assert_eq!(buf[(46, 2)].bg, Color::Rgb(60, 60, 60));
+        assert!(
+            buf[(46, 2)]
+                .modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED)
+        );
+        assert_eq!(buf[(9, 3)].fg, Color::Red); // Match lies beyond the clipped text.
+        assert_eq!(buf[(46, 3)].fg, Color::Red);
+        assert_eq!(buf[(46, 4)].fg, Color::Reset);
+
+        let mut find_buf = Buffer::empty(area);
+        let find = SearchPattern::new("failed").unwrap();
+        table().with_search(Some(&find)).render(area, &mut find_buf);
+        assert_eq!(buf[(46, 2)].style(), find_buf[(46, 2)].style());
+        assert_eq!(buf[(46, 3)].style(), find_buf[(46, 3)].style());
+
+        let mut cleared = Buffer::empty(area);
+        table()
+            .with_search(Some(&search))
+            .render(area, &mut cleared);
+        assert_eq!(cleared[(36, 2)].fg, Color::Red);
+        assert_eq!(cleared[(46, 2)].fg, Color::White);
+        assert_eq!(cleared[(9, 3)].fg, Color::Reset);
+    }
 
     #[test]
     fn search_highlights_full_cells_and_distinguishes_the_selected_match_after_projection() {

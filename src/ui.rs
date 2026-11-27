@@ -23,6 +23,9 @@ use crate::tabs::{
 
 fn prompt_prefix(prompt: &CommandPrompt, width: u16) -> &'static str {
     match prompt.kind {
+        PromptKind::Rows if width >= 72 => "& Rows (regex, ignore case): ",
+        PromptKind::Rows if width >= 40 => "& regex: ",
+        PromptKind::Rows => "&",
         PromptKind::Columns if width >= 72 => "* Columns (regex, ignore case): ",
         PromptKind::Columns if width >= 40 => "* regex: ",
         PromptKind::Columns => "*",
@@ -286,7 +289,12 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_tabs_view(&self, area: Rect, buf: &mut Buffer) {
-        render_tabs_header(self.0.tabs(), self.0.file_name(), area, buf);
+        let visualize = self.0.state().visualize();
+        let status = visualize
+            .filter_running
+            .then_some(visualize.filter_status.as_deref())
+            .flatten();
+        render_tabs_header_with_status(self.0.tabs(), self.0.file_name(), status, area, buf);
     }
 
     fn render_footer_view(&self, area: Rect, buf: &mut Buffer) {
@@ -305,7 +313,9 @@ impl<'a> AppWidget<'a> {
                 "e.g. ^exact_name$, a|^pre|suffix$"
                     .dim()
                     .render(layout.input_area, buf);
-            } else if prompt.kind == PromptKind::Find && prompt.buffer.is_empty() {
+            } else if matches!(prompt.kind, PromptKind::Find | PromptKind::Rows)
+                && prompt.buffer.is_empty()
+            {
                 "e.g. error, ^exact value$, error|timeout"
                     .dim()
                     .render(layout.input_area, buf);
@@ -335,6 +345,33 @@ impl<'a> AppWidget<'a> {
         let visualize = self.0.state().visualize();
         let data = &self.0.parquet_ctx.sample_data;
         let mut items = Vec::new();
+        for (i, filter) in visualize.row_filters.iter().enumerate() {
+            items.push(FooterItem {
+                label: if i == 0 {
+                    format!(
+                        "& {}{}/{} ",
+                        visualize.rows.len(data.total_rows),
+                        if visualize.row_results_incomplete {
+                            "+"
+                        } else {
+                            ""
+                        },
+                        data.total_rows
+                    )
+                } else {
+                    "& ".into()
+                },
+                value: filter.expression(),
+                color: Color::Cyan,
+            });
+        }
+        if let Some(status) = &visualize.filter_status {
+            items.push(FooterItem {
+                label: String::new(),
+                value: status,
+                color: Color::Yellow,
+            });
+        }
         if let Some(expression) = &visualize.column_filter {
             items.push(FooterItem {
                 label: format!(
@@ -470,10 +507,18 @@ impl<'a> AppWidget<'a> {
 
         let visualize = self.0.state().visualize();
         let data = &self.0.parquet_ctx.sample_data;
+        if let Some(error) = &visualize.row_error {
+            Paragraph::new(format!("Unable to read filtered rows: {error}"))
+                .red()
+                .render(area, buf);
+            return;
+        }
         DataTable::new(data)
+            .with_rows(&visualize.rows)
             .with_width_cache(&visualize.column_widths)
             .with_projection(visualize.projection())
             .with_search(visualize.search.as_ref())
+            .with_row_filters(&visualize.row_filters)
             .with_horizontal_scroll(self.0.state().horizontal_offset())
             .with_vertical_scroll(self.0.state().data_vertical_scroll())
             .with_selected_row(Some(self.0.state().vertical_offset()))
@@ -485,7 +530,18 @@ impl<'a> AppWidget<'a> {
     }
 }
 
+#[cfg(test)]
 fn render_tabs_header(tabs: &TabManager, file_name: &str, area: Rect, buf: &mut Buffer) {
+    render_tabs_header_with_status(tabs, file_name, None, area, buf);
+}
+
+fn render_tabs_header_with_status(
+    tabs: &TabManager,
+    file_name: &str,
+    status: Option<&str>,
+    area: Rect,
+    buf: &mut Buffer,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -495,12 +551,23 @@ fn render_tabs_header(tabs: &TabManager, file_name: &str, area: Rect, buf: &mut 
 
     // Reserve the tabs and a gap before giving the path any remaining space.
     let available_width = usize::from(inner_area.width).saturating_sub(tabs.content_width() + 1);
+    let status_line = Line::from(status.unwrap_or("")).yellow();
+    let status_width = status_line.width().min(available_width) as u16;
+    let gap = u16::from(status_width > 0 && available_width > usize::from(status_width));
     let file_name_line = Line::from(file_name).green().right_aligned();
-    let file_name_width = file_name_line.width().min(available_width) as u16;
-    let [tabs_area, file_name_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(file_name_width)])
-            .areas(inner_area);
+    let file_name_width = file_name_line
+        .width()
+        .min(available_width.saturating_sub(usize::from(status_width + gap)))
+        as u16;
+    let [tabs_area, file_name_area, _, status_area] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(file_name_width),
+        Constraint::Length(gap),
+        Constraint::Length(status_width),
+    ])
+    .areas(inner_area);
     tabs.render_content(tabs_area, buf);
+    status_line.render(status_area, buf);
 
     if file_name_line.width() > usize::from(file_name_width) && file_name_width > 0 {
         let [ellipsis_area, suffix_area] =
@@ -616,6 +683,28 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn row_filter_progress_stays_visible_beside_long_file_paths() {
+        let tabs = TabManager::new(3, 1, 5, 0, &[]);
+        let path = "/very/long/path/".repeat(20);
+        for width in [0, 1, 30, 80, 120] {
+            let area = Rect::new(0, 0, width, 3);
+            let mut buf = Buffer::empty(area);
+            render_tabs_header_with_status(
+                &tabs,
+                &path,
+                Some("⠋ Filter 2000/6005 · 0.1s"),
+                area,
+                &mut buf,
+            );
+            if width >= 80 {
+                let line: String = (0..width).map(|x| buf[(x, 1)].symbol()).collect();
+                assert!(line.contains("⠋ Filter 2000/6005"), "{line}");
+                assert!(line.contains("Visualize"), "{line}");
             }
         }
     }
