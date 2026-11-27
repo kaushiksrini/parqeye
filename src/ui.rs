@@ -299,7 +299,9 @@ impl<'a> AppWidget<'a> {
 
     fn render_footer_view(&self, area: Rect, buf: &mut Buffer) {
         let [area, shortcuts] = footer_areas(area);
-        self.0.tabs().render_instructions(shortcuts, buf);
+        self.0
+            .tabs()
+            .render_instructions(self.0.escape_action, shortcuts, buf);
 
         if self.0.tabs().active_tab().to_string() != "Visualize" {
             self.0.title.bold().green().render(area, buf);

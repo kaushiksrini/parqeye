@@ -74,18 +74,24 @@ impl TabManager {
             + self.tabs.len().saturating_sub(1)
     }
 
-    pub fn render_instructions(&self, area: Rect, buf: &mut Buffer) {
+    pub fn render_instructions(&self, escape_action: Option<&str>, area: Rect, buf: &mut Buffer) {
         let instructions = [
             Line::from(vec!["[Tab]".green(), " Toggle Mode".into()]),
             Line::from(vec!["[?]".yellow(), " Help".into()]),
             Line::from(vec!["[Q]".blue(), "uit".into()]),
         ];
+        let escape = escape_action
+            .map(|action| Line::from(vec!["[Esc]".yellow(), format!(" {action}").into()]))
+            .filter(|line| line.width() + 3 + 6 <= usize::from(area.width));
+        // Reserve Esc and quit first, keeping Esc leftmost among fitted commands.
+        let instructions_width =
+            usize::from(area.width) - escape.as_ref().map_or(0, |line| line.width() + 3);
 
         // Keep the longest suffix of complete commands that fits the footer.
         let mut line = Line::default();
         for instruction in instructions.into_iter().rev() {
             let separator = if line.spans.is_empty() { "" } else { " | " };
-            if instruction.width() + separator.len() + line.width() > usize::from(area.width) {
+            if instruction.width() + separator.len() + line.width() > instructions_width {
                 break;
             }
             let mut spans = instruction.spans;
@@ -94,6 +100,11 @@ impl TabManager {
             }
             spans.extend(line.spans);
             line = Line::from(spans);
+        }
+        if let Some(mut escape) = escape {
+            escape.spans.push(" | ".into());
+            escape.spans.extend(line.spans);
+            line = escape;
         }
 
         if area.width < 6 {

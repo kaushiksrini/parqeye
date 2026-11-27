@@ -27,6 +27,7 @@ pub struct AppRenderView<'a> {
     file_name: &'a str,
     tabs: &'a TabManager,
     pub state: &'a AppState,
+    pub(crate) escape_action: Option<&'static str>,
 }
 
 impl<'a> AppRenderView<'a> {
@@ -37,6 +38,17 @@ impl<'a> AppRenderView<'a> {
             file_name: &app.file_name,
             tabs: &app.tabs,
             state: &app.state,
+            escape_action: if app.state.help().is_some() {
+                None
+            } else if app.state.visualize().prompt().is_some() {
+                Some("Cancel")
+            } else if app.filter_worker.is_running() {
+                Some("Stop")
+            } else if app.search_worker.is_running() {
+                Some("Cancel")
+            } else {
+                None
+            },
         }
     }
 
@@ -714,7 +726,7 @@ impl<'a> App<'a> {
         let total = self.parquet_ctx.sample_data.total_rows;
         let count = self.state.visualize().rows.len(total);
         self.state.visualize_mut().filter_status = Some(format!(
-            "{} {count} matches so far · Row {scanned}/{total} · {:.1}s · Esc stops",
+            "{} {count} matches so far · Row {scanned}/{total} · {:.1}s",
             FRAMES[frame],
             elapsed.as_secs_f32(),
         ));
@@ -804,8 +816,7 @@ impl<'a> App<'a> {
         let spinner = FRAMES[frame];
         let total = self.parquet_ctx.sample_data.total_rows;
         let row = self.search_worker.current_row().min(total);
-        self.state.visualize_mut().search_status =
-            Some(format!("{spinner} Row {row}/{total} · Esc cancels"));
+        self.state.visualize_mut().search_status = Some(format!("{spinner} Row {row}/{total}"));
     }
 }
 
@@ -1758,7 +1769,7 @@ mod tests {
     }
 
     #[test]
-    fn footer_shortcuts_stay_fixed_while_functions_prompts_and_messages_compose() {
+    fn footer_shortcuts_show_available_escape_actions_while_functions_compose() {
         let path = format!(
             "{}/alltypes_plain.parquet",
             crate::file::parquet_test_data()
@@ -1778,6 +1789,7 @@ mod tests {
                 let buf = terminal.backend().buffer();
                 let context: String = (0..context_width).map(|x| buf[(x, 9)].symbol()).collect();
                 assert!(!context.contains("Col:"), "{context}");
+                assert!(!context.contains("Esc"), "{context}");
                 let shortcuts: Vec<_> = (context_width..width)
                     .map(|x| buf[(x, 9)].clone())
                     .collect();
@@ -1803,31 +1815,39 @@ mod tests {
             }
 
             app.handle_key_event(KeyCode::Char('&').into());
-            assert_eq!(render(&mut app).1, expected_shortcuts);
+            let cancel_shortcuts = render(&mut app).1;
+            if width >= 40 {
+                let text: String = cancel_shortcuts.iter().map(|cell| cell.symbol()).collect();
+                assert!(text.trim_start().starts_with("[Esc] Cancel"), "{text}");
+            }
             app.handle_key_event(KeyCode::Char('[').into());
             app.handle_key_event(KeyCode::Enter.into());
-            assert_eq!(render(&mut app).1, expected_shortcuts);
+            assert_eq!(render(&mut app).1, cancel_shortcuts);
             app.handle_key_event(KeyCode::Esc.into());
             submit_row_filter(&mut app, ".*");
-            assert_eq!(render(&mut app).1, expected_shortcuts);
+            let stop_shortcuts = render(&mut app).1;
+            if width >= 40 {
+                let text: String = stop_shortcuts.iter().map(|cell| cell.symbol()).collect();
+                assert!(text.trim_start().starts_with("[Esc] Stop"), "{text}");
+            }
             finish_filter(&mut app);
             assert_eq!(render(&mut app).1, expected_shortcuts);
             submit_row_filter(&mut app, "");
             assert_eq!(render(&mut app).1, expected_shortcuts);
 
             app.handle_key_event(KeyCode::Char('*').into());
-            assert_eq!(render(&mut app).1, expected_shortcuts);
+            assert_eq!(render(&mut app).1, cancel_shortcuts);
             app.handle_key_event(KeyCode::Char('[').into());
             app.handle_key_event(KeyCode::Enter.into());
-            assert_eq!(render(&mut app).1, expected_shortcuts);
+            assert_eq!(render(&mut app).1, cancel_shortcuts);
             app.handle_key_event(KeyCode::Esc.into());
             set_column_filter(&mut app, "^bool_col$|^id$");
             assert_eq!(render(&mut app).1, expected_shortcuts);
             app.handle_key_event(KeyCode::Char('/').into());
-            assert_eq!(render(&mut app).1, expected_shortcuts);
+            assert_eq!(render(&mut app).1, cancel_shortcuts);
             app.handle_key_event(KeyCode::Esc.into());
             set_search(&mut app, "^true$");
-            assert_eq!(render(&mut app).1, expected_shortcuts);
+            assert_eq!(render(&mut app).1, cancel_shortcuts);
             finish_search(&mut app);
             let (context, shortcuts) = render(&mut app);
             assert_eq!(shortcuts, expected_shortcuts);
