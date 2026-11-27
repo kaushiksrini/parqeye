@@ -6,3 +6,6 @@ pub mod tabs;
 pub mod ui;
 
 pub use app::App;
+
+pub(crate) mod jobs;
+pub mod view;

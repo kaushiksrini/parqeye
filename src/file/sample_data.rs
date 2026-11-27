@@ -1,6 +1,7 @@
 use std::cell::{Cell, Ref, RefCell};
-use std::sync::Once;
+use std::sync::{Arc, Once, Weak};
 
+use crate::view::RowIndex;
 use polars::prelude::*;
 
 type LoadedRows = (Vec<Vec<String>>, Vec<String>);
@@ -37,6 +38,10 @@ pub struct ParquetSampleData {
     pub total_columns: usize,
     pub total_rows: usize,
     window: RefCell<RowWindow>,
+    // A weak identity lets a progressively growing index mutate without
+    // cloning its entire bitmap merely because the viewport is cached.
+    window_index: RefCell<Option<Weak<roaring::RoaringTreemap>>>,
+    window_file_rows: RefCell<Vec<usize>>,
 }
 
 impl ParquetSampleData {
@@ -81,6 +86,8 @@ impl ParquetSampleData {
             flattened_columns: columns,
             total_rows,
             window: RefCell::new(RowWindow { start: 0, rows }),
+            window_index: RefCell::default(),
+            window_file_rows: RefCell::default(),
         })
     }
 
@@ -125,6 +132,11 @@ impl ParquetSampleData {
 
     /// Reload the bounded window when the requested viewport is outside it.
     pub fn ensure_loaded(&self, view_start: usize, view_len: usize) {
+        if self.window_index.borrow().is_some() {
+            *self.window.borrow_mut() = RowWindow::default();
+            *self.window_index.borrow_mut() = None;
+            self.window_file_rows.borrow_mut().clear();
+        }
         let view_len = view_len.min(self.total_rows.saturating_sub(view_start));
         if self.window.borrow().covers(view_start, view_len) {
             return;
@@ -143,8 +155,77 @@ impl ParquetSampleData {
         }
     }
 
+    /// Filtered windows contain view positions, with file identities held in the
+    /// row index. Keep roughly three screens, using Parquet row selection.
+    pub(crate) fn ensure_view_loaded(
+        &self,
+        index: &RowIndex,
+        start: usize,
+        len: usize,
+    ) -> Result<(), String> {
+        let RowIndex::Filtered(bitmap) = index else {
+            self.ensure_loaded(start, len);
+            return Ok(());
+        };
+        let total = index.len(self.total_rows);
+        let len = len.min(total.saturating_sub(start));
+        if self.window_index.borrow().is_some() && self.window.borrow().covers(start, len) {
+            let same_identity = self
+                .window_index
+                .borrow()
+                .as_ref()
+                .is_some_and(|cached| cached.ptr_eq(&Arc::downgrade(bitmap)));
+            // Appended matches leave existing view positions intact. Validate
+            // only the bounded cached window when the bitmap identity changes.
+            if same_identity
+                || self
+                    .window_file_rows
+                    .borrow()
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &row)| index.file_row(self.window.borrow().start + i) == Some(row))
+            {
+                *self.window_index.borrow_mut() = Some(Arc::downgrade(bitmap));
+                return Ok(());
+            }
+        }
+        // Invalidate before reading so errors never show rows from an old view.
+        *self.window.borrow_mut() = RowWindow::default();
+        let new_start = start.saturating_sub(len);
+        let ids: Vec<_> = (new_start..new_start.saturating_add(len.saturating_mul(3)).min(total))
+            .filter_map(|position| index.file_row(position))
+            .collect();
+        let rows = super::rows::selected_rows(&self.file_path, &ids, &self.flattened_columns)?;
+        *self.window.borrow_mut() = RowWindow {
+            start: new_start,
+            rows,
+        };
+        *self.window_file_rows.borrow_mut() = ids;
+        *self.window_index.borrow_mut() = Some(Arc::downgrade(bitmap));
+        Ok(())
+    }
+
     pub fn loaded(&self) -> Ref<'_, RowWindow> {
         self.window.borrow()
+    }
+
+    /// Resolve types through the same reader as the unfiltered table. Arrow's
+    /// Parquet inference differs for some nested timestamp/timezone metadata.
+    pub(crate) fn column_types(file_path: &str, names: &[String]) -> Result<Vec<DataType>, String> {
+        catch_polars_panic(|| {
+            let schema = LazyFrame::scan_parquet(PlRefPath::new(file_path), Default::default())?
+                .collect_schema()?;
+            names
+                .iter()
+                .map(|name| {
+                    schema
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| format!("Missing column: {name}").into())
+                })
+                .collect()
+        })
+        .map_err(|e| e.to_string())
     }
 
     /// A bounded, projected search chunk, formatted exactly like table cells.
@@ -195,7 +276,7 @@ impl ParquetSampleData {
         let file_path = &self.file_path;
         catch_polars_panic(|| {
             let df = LazyFrame::scan_parquet(PlRefPath::new(file_path), Default::default())?
-                .select([col(name.as_str())])
+                .select([Expr::Column(name.as_str().into())])
                 .slice(row as i64, 1)
                 .collect()?;
             let value = df.column(name)?.as_materialized_series().get(0)?;
@@ -224,7 +305,7 @@ impl ParquetSampleData {
     }
 }
 
-fn format_cell(value: &AnyValue<'_>) -> String {
+pub(crate) fn format_cell(value: &AnyValue<'_>) -> String {
     match value {
         AnyValue::Null => "NULL".to_string(),
         AnyValue::String(value) => (*value).to_string(),
@@ -281,7 +362,7 @@ fn cell_json(value: AnyValue<'_>) -> PolarsResult<serde_json::Value> {
     })
 }
 
-fn catch_polars_panic<T>(
+pub(crate) fn catch_polars_panic<T>(
     operation: impl FnOnce() -> Result<T, Box<dyn std::error::Error>> + std::panic::UnwindSafe,
 ) -> Result<T, Box<dyn std::error::Error>> {
     POLARS_PANIC_HOOK.call_once(|| {
@@ -315,6 +396,24 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appending_progressive_rows_reuses_the_loaded_prefix_without_pinning_the_bitmap() {
+        let fixture = crate::tabs::visualize::filter::tests::fixture();
+        let mut data = ParquetSampleData::open(fixture.0.to_str().unwrap(), 6005).unwrap();
+        let mut index = RowIndex::Filtered(Arc::new([0, 3, 6].into_iter().collect()));
+        data.ensure_view_loaded(&index, 0, 1).unwrap();
+        if let RowIndex::Filtered(rows) = &mut index {
+            assert_eq!(Arc::strong_count(rows), 1);
+            Arc::make_mut(rows).extend([9, 12]);
+        }
+        // A cache miss now fails instead of silently rereading the same prefix.
+        data.file_path = "nonexistent-progressive-cache-test.parquet".into();
+        data.ensure_view_loaded(&index, 0, 1).unwrap();
+        assert_eq!(data.loaded().rows[0][0], "0");
+        assert!(data.ensure_view_loaded(&index, 3, 1).is_err());
+        assert!(data.loaded().rows.is_empty());
+    }
 
     fn test_data_path(filename: &str) -> String {
         format!("{}/{}", crate::file::parquet_test_data(), filename)

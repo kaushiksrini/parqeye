@@ -11,7 +11,7 @@ edition = "2024"
 [dependencies]
 clap = { version = "4", features = ["derive"] }         # for CLI parsing
 parquet = { version = "59.0.0", features = ["cli","async","json","arrow"] }  # core Parquet APIs
-arrow = "59.0.0"                                        # Arrow arrays and data types
+arrow = { version = "59.0.0", features = ["ffi"] }       # Arrow arrays and data types
 parquet-format = "4.0.0"                                # Thrift structs
 ratatui = "0.29.0"
 crossterm = "0.29.0"
@@ -23,6 +23,8 @@ base64 = "0.22.1"                                      # OSC 52 clipboard payloa
 thiserror = "2"
 regex = "1"
 regex-syntax = "0.8"
+roaring = "0.11"
+polars-arrow = "0.55.0"
 
 # The profile that 'dist' will build with
 [profile.dist]

@@ -12,6 +12,7 @@ pub enum PromptKind {
     GoToRow,
     Columns,
     Find,
+    Rows,
 }
 
 impl PromptKind {
@@ -20,6 +21,7 @@ impl PromptKind {
             Self::GoToRow => ':',
             Self::Columns => '*',
             Self::Find => '/',
+            Self::Rows => '&',
         }
     }
 }
@@ -163,6 +165,7 @@ pub enum PromptEvent {
 pub enum VisualizeCommand {
     GoToRow(usize),
     FilterColumns(String),
+    FilterRows(String),
     Find(String),
 }
 
@@ -183,6 +186,7 @@ impl fmt::Display for CommandParseError {
 
 pub fn parse_command(kind: PromptKind, input: &str) -> Result<VisualizeCommand, CommandParseError> {
     match kind {
+        PromptKind::Rows => Ok(VisualizeCommand::FilterRows(input.to_string())),
         PromptKind::Columns => Ok(VisualizeCommand::FilterColumns(input.to_string())),
         PromptKind::Find => Ok(VisualizeCommand::Find(input.to_string())),
         PromptKind::GoToRow => {

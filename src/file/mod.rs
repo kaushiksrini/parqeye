@@ -2,6 +2,7 @@ pub mod error;
 pub mod metadata;
 pub mod parquet_ctx;
 pub mod row_groups;
+pub(crate) mod rows;
 pub mod sample_data;
 pub mod schema;
 pub mod utils;

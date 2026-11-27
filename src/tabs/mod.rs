@@ -14,11 +14,12 @@ use crate::components::help::HelpSection;
 use crossterm::event::KeyEvent;
 use std::io;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EventOutcome {
     Consumed,
     Bubble,
     CopyCell,
+    FilterRows(String),
     FindCell {
         backwards: bool,
         include_current: bool,
